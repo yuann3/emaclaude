@@ -206,7 +206,7 @@ Expands all file sections so changes are visible per-file."
           (when (eq major-mode 'vterm-mode)
             (vterm-send-string "/exit")
             (vterm-send-return))))))
-  ;; Kill buffers after 5 second timeout
+  ;; Kill buffers after 5 second timeout, suppress "process running" prompt
   (run-at-time 5 nil
                (lambda ()
                  (dolist (name (list emaclaude-buffer-planning
@@ -215,6 +215,9 @@ Expands all file sections so changes are visible per-file."
                                      emaclaude-buffer-diff))
                    (let ((buf (get-buffer name)))
                      (when (and buf (buffer-live-p buf))
+                       (let ((proc (get-buffer-process buf)))
+                         (when proc
+                           (set-process-query-on-exit-flag proc nil)))
                        (kill-buffer buf))))))
   ;; Stop daemon
   (when (and emaclaude--daemon-process
