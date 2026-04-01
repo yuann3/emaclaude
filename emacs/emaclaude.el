@@ -115,11 +115,11 @@ Always starts in the project root directory."
         (vterm-send-return)))))
 
 (defun emaclaude--open-diff-view ()
-  "Open a magit diff (main...HEAD) in the rightmost split."
+  "Open a magit diff showing all local changes (staged + unstaged)."
   (require 'magit)
   (let ((win (car (last (window-list)))))
     (select-window win)
-    (magit-diff-range "main...HEAD")
+    (magit-diff-working-tree "HEAD")
     (rename-buffer emaclaude-buffer-diff t)
     (emaclaude-review-mode 1)))
 
