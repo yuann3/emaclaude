@@ -59,8 +59,8 @@ The developer clears the session. All agent buffers close, the daemon shuts down
 | R1.1 | HTTP API server accepting workflow signals from Claude Code skills | Must |
 | R1.2 | Workflow state machine managing transitions between phases | Must |
 | R1.3 | Emacs bridge via `emacsclient --eval` for buffer and layout management | Must |
-| R1.4 | Process supervision via MRA library (restart crashed sessions) | Must |
-| R1.5 | Reconnect to existing buffers on daemon restart | Should |
+| R1.4 | ~~Process supervision via MRA library~~ — Removed. Claude Code is stable production software; process monitoring is unnecessary overhead | N/A |
+| R1.5 | ~~Reconnect to existing buffers on daemon restart~~ — Removed. If Emacs dies, user restarts manually | N/A |
 | R1.6 | Configurable server port and buffer names | Should |
 | R1.7 | Health check endpoint for debugging | Should |
 
@@ -142,7 +142,6 @@ The developer clears the session. All agent buffers close, the daemon shuts down
 
 | Dependency | Purpose |
 |-----------|---------|
-| MRA framework | Supervisor tree for process lifecycle management |
 | Axum | HTTP server for the daemon |
 | Tokio | Async runtime |
 | Claude Code CLI | All AI agent sessions |

@@ -63,7 +63,6 @@ The coding and review agents form an autonomous loop. A Rust daemon (emaclaude) 
 A lightweight process that coordinates the workflow. It does NOT make any LLM calls — all AI work happens inside Claude Code sessions.
 
 **Depends on:**
-- `mra` (path dependency) — supervisor tree for process lifecycle
 - `axum` — HTTP server
 - `tokio` — async runtime
 - `serde`/`serde_json` — payload serialization
@@ -143,11 +142,7 @@ All communication with Emacs goes through `emacsclient --eval`. The daemon never
 
 #### 1.4 Process Management
 
-Uses MRA's supervisor tree to manage Claude Code sessions:
-- Each Claude Code session is a supervised child process
-- If a session crashes, MRA supervisor restarts it
-- Graceful shutdown: send `/exit` to session, wait timeout, force-kill
-- On emaclaude daemon restart: check for existing `*mra-*` buffers and reconnect
+No active process monitoring. Claude Code is stable production software — crash recovery is unnecessary overhead. If Emacs or a session dies, the user restarts manually via `M-x emaclaude-launch`. Graceful shutdown is handled by `M-x emaclaude-clear-session` which sends `/exit` to each vterm buffer.
 
 ### 2. Doom Emacs Module
 
@@ -343,28 +338,24 @@ doom sync
   - `vterm` module enabled
   - `magit` module enabled
 - `gh` CLI (for GitHub integration)
-- MRA framework (pulled as cargo dependency)
 
 ## Project Structure
 
 ```
 emaclaude/
-├── Cargo.toml              # depends on mra (path dep)
+├── Cargo.toml
 ├── src/
 │   ├── main.rs             # CLI entry: `emaclaude serve`, `emaclaude setup`
+│   ├── lib.rs              # Module exports
 │   ├── server.rs           # Axum HTTP API
 │   ├── state.rs            # Workflow state machine
 │   ├── emacs.rs            # Emacs bridge (emacsclient calls)
-│   ├── process.rs          # Claude Code process management via MRA supervisor
-│   ├── github.rs           # GitHub PR comment fetching via gh CLI
+│   ├── effects.rs          # Side effect executor
 │   └── config.rs           # Configuration loading
 ├── emacs/
-│   ├── emaclaude.el        # Main Doom module
-│   ├── emaclaude-diff.el   # Magit-based diff review mode
+│   ├── emaclaude.el        # Main Doom module (includes review mode)
 │   ├── packages.el         # Doom package declarations
 │   └── config.el           # Doom module config
 └── skills/
-    ├── planning-done.md    # /planning-done skill
-    ├── coding-done.md      # Prompt template (baked into coding agent prompt)
-    └── review-done.md      # Prompt template (baked into review agent prompt)
+    └── planning-done.md    # /planning-done skill
 ```
