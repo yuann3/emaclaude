@@ -1,13 +1,13 @@
 #+title: emaclaude
 #+author: Yuan
 
-so recently we got cmux, emdashes, conductor, and whatever the latest "agentic IDE" is this week. new one every tuesday. they all do the same thing: wrap claude in an electron app and charge you for the privilege.
+so recently we got cmux, emdashes, conductor, and whatever the latest "agentic IDE" and they wrap claude in an electron app and charge you for the privilege.
 
 here's the thing though. if you're already running emacs, you have a programmable operating system sitting right there. you can split buffers, run terminals, diff code, talk to external processes, script literally anything in elisp. so why not just... do it in emacs?
 
 emaclaude is three claude code sessions running in vterm buffers, coordinated by a small rust daemon. one plans. one codes. one reviews. they talk to each other through http. you watch the whole thing happen live in split panes.
 
-that's it. no electron. no subscription. no "agentic workspace" marketing. just emacs doing what emacs has always done, except now there's an AI in the terminal.
+for now, is using Doom Module so its kinda *DOOM EMACS ONLY*, but i will change that in the future
 
 * how it works
 
@@ -35,7 +35,7 @@ planning stays on the left so you can reference it while watching the agents wor
 * architecture
 
 #+begin_src
-┌──────────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────┐
 │                   Doom Emacs                      │
 │                                                   │
 │  vterm buffers (planning, coding, review, diff)   │
@@ -43,22 +43,22 @@ planning stays on the left so you can reference it while watching the agents wor
 └──────────────────────┬────────────────────────────┘
                        │ emacsclient --eval
                        │
-┌──────────────────────┴────────────────────────────┐
+┌──────────────────────┴─────────────────────────────┐
 │              emaclaude daemon (rust)               │
 │                                                    │
 │  axum http server ── state machine ── emacs bridge │
-└──────────────────────┬────────────────────────────┘
+└──────────────────────┬─────────────────────────────┘
                        │ curl
                        │
-┌──────────────────────┴────────────────────────────┐
+┌──────────────────────┴─────────────────────────────┐
 │           claude code skills                       │
 │  /planning-done    /coding-done    /review-done    │
-└───────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────┘
 #+end_src
 
-the daemon doesn't call any LLMs. it doesn't generate prompts. all the AI work happens inside the claude code sessions. the daemon is just a state machine that routes messages between buffers through emacsclient. skills inside claude code sessions curl the daemon when they're done with their phase.
+the daemon doesn't call any LLMs. it doesn't generate prompts. all the AI work happens inside the claude code sessions, is just a state machine that routes messages between buffers through emacsclient. skills inside claude code sessions curl the daemon when they're done with their phase.
 
-the whole daemon is ~500 lines of rust. axum for http, tokio for async, figment for config. no frameworks, no dependencies you wouldn't write yourself on a weekend.
+the whole daemon is ~500 lines of rust. axum for http, tokio for async, figment for config
 
 * the review loop
 
@@ -152,12 +152,3 @@ review = "*mra-review*"
 diff = "*mra-diff*"
 #+end_src
 
-* why not just use [insert tool here]
-
-because i already have emacs open. it has splits, terminals, git integration, a programmable extension language, and 40 years of accumulated tooling. adding another electron app on top of that is backwards.
-
-emaclaude doesn't replace your editor. it turns the editor you already use into a multi-agent development environment. three claude code sessions, one state machine, and a magit diff view. everything else is just emacs being emacs.
-
-* license
-
-MIT
