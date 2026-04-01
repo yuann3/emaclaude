@@ -100,8 +100,13 @@ impl WorkflowState {
                 state: WorkflowState::Reviewing,
                 effects: vec![SideEffect::SendToReviewAgent {
                     prompt: format!(
-                        "Review the changes on branch '{}'. When done, report results via: \
-                         curl -X POST http://localhost:{}/review-done -H 'Content-Type: application/json' \
+                        "Review the git diff of branch '{}' against main. Check for:\n\
+                         1. Code quality — clean, idiomatic, well-structured\n\
+                         2. Security — no vulnerabilities, injection risks, or leaked secrets\n\
+                         3. Redundant code — no duplication, dead code, or unnecessary complexity\n\
+                         4. Spec adherence — does the implementation match the spec?\n\n\
+                         When done, report results via:\n\
+                         curl -s -X POST http://localhost:{}/review-done -H 'Content-Type: application/json' \
                          -d '{{\"status\": \"approved\"}}' or -d '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
                         branch, config.port
                     ),
@@ -225,17 +230,41 @@ impl WorkflowState {
                 state: WorkflowState::PrCreated,
                 effects: vec![SideEffect::SendToCodingAgent {
                     prompt: format!(
-                        "Fetch and address GitHub review comments for PR #{} using: \
-                         gh api repos/{{owner}}/{{repo}}/pulls/{}/comments. \
-                         Fix the issues and push updates. When done, report via: \
-                         curl -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
+                        "Fetch review comments from PR #{} using `gh api`. \
+                         For each comment: fix the issue, reply to the comment on GitHub, \
+                         and resolve the conversation. Push all fixes. \
+                         Do NOT re-request review.\n\n\
+                         When done, report via:\n\
+                         curl -s -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
                          -d '{{\"branch\": \"current\"}}'",
-                        pr_number, pr_number, config.port
+                        pr_number, config.port
                     ),
                 }],
             },
 
-            // 12. Unhandled → same state, no effects
+            // HumanReview + CodingDone → stay in HumanReview, refresh diff
+            (WorkflowState::HumanReview, Event::CodingDone { .. }) => Transition {
+                state: WorkflowState::HumanReview,
+                effects: vec![
+                    SideEffect::RefreshDiffView,
+                    SideEffect::Notify {
+                        message: "Coding agent finished fixes. Diff refreshed.".to_string(),
+                    },
+                ],
+            },
+
+            // PrCreated + CodingDone → stay in PrCreated, refresh diff
+            (WorkflowState::PrCreated, Event::CodingDone { .. }) => Transition {
+                state: WorkflowState::PrCreated,
+                effects: vec![
+                    SideEffect::RefreshDiffView,
+                    SideEffect::Notify {
+                        message: "GitHub review fixes complete. Diff refreshed.".to_string(),
+                    },
+                ],
+            },
+
+            // Unhandled → same state, no effects
             (state, _) => Transition {
                 state,
                 effects: vec![],

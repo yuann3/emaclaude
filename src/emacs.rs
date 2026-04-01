@@ -59,6 +59,10 @@ impl EmacsBridge {
         format!("(emaclaude--notify \"{}\")", Self::escape(message))
     }
 
+    pub fn show_pr_link_elisp(&self, url: &str) -> String {
+        format!("(emaclaude--show-pr-link \"{}\")", Self::escape(url))
+    }
+
     pub fn shutdown_elisp(&self) -> String {
         "(emaclaude--clear-session)".to_string()
     }

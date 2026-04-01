@@ -242,6 +242,32 @@ fn clear_session_from_any_state() {
 }
 
 #[test]
+fn human_review_coding_done_refreshes_diff() {
+    let config = default_config();
+    let t = WorkflowState::HumanReview.next(
+        Event::CodingDone {
+            branch: "feat/x".into(),
+        },
+        &config,
+    );
+    assert_eq!(t.state, WorkflowState::HumanReview);
+    assert!(t.effects.contains(&SideEffect::RefreshDiffView));
+}
+
+#[test]
+fn pr_created_coding_done_refreshes_diff() {
+    let config = default_config();
+    let t = WorkflowState::PrCreated.next(
+        Event::CodingDone {
+            branch: "feat/x".into(),
+        },
+        &config,
+    );
+    assert_eq!(t.state, WorkflowState::PrCreated);
+    assert!(t.effects.contains(&SideEffect::RefreshDiffView));
+}
+
+#[test]
 fn unhandled_transition_returns_same_state() {
     let config = default_config();
     // Idle + CodingDone should be unhandled

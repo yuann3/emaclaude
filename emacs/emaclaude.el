@@ -129,6 +129,18 @@ CALLBACK is called with the response buffer if provided."
   "Display MSG in the minibuffer."
   (message "[emaclaude] %s" msg))
 
+(defun emaclaude--show-pr-link (url)
+  "Display PR URL in the diff buffer and minibuffer."
+  (emaclaude--notify (format "PR created: %s" url))
+  (let ((buf (get-buffer emaclaude-buffer-diff)))
+    (when buf
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (point-min))
+            (insert (propertize (format "PR: %s\n\n" url)
+                                'face 'link))))))))
+
 (defun emaclaude--clear-session ()
   "Alias for `emaclaude-clear-session'."
   (emaclaude-clear-session))
@@ -151,7 +163,7 @@ CALLBACK is called with the response buffer if provided."
                           (emaclaude--notify (format "daemon %s" (string-trim event)))))
   (emaclaude--notify (format "daemon started on port %d" emaclaude-port))
   ;; Spawn the planning buffer
-  (emaclaude--spawn-buffer emaclaude-buffer-planning ""))
+  (emaclaude--spawn-buffer emaclaude-buffer-planning "claude"))
 
 ;;;###autoload
 (defun emaclaude-clear-session ()
@@ -222,15 +234,16 @@ CALLBACK is called with the response buffer if provided."
 (defun emaclaude-add-comment ()
   "Prompt for a comment at the current hunk and store it."
   (interactive)
-  (let* ((line (line-number-at-pos))
-         (text (read-string (format "Comment at line %d: " line)))
+  (let* ((file (or (magit-file-at-point) "unknown"))
+         (line (line-number-at-pos))
+         (text (read-string (format "Comment on %s:%d: " file line)))
          (ov (make-overlay (line-beginning-position) (line-end-position))))
     (overlay-put ov 'emaclaude-comment t)
     (overlay-put ov 'after-string
                  (propertize (format "  # %s" text)
                              'face 'font-lock-comment-face))
-    (push `((line . ,line) (text . ,text)) emaclaude--review-comments)
-    (emaclaude--notify (format "comment added at line %d" line))))
+    (push `((file . ,file) (line . ,line) (text . ,text)) emaclaude--review-comments)
+    (emaclaude--notify (format "comment added on %s:%d" file line))))
 
 (defun emaclaude-submit-comments ()
   "POST all review comments to the daemon /human-review endpoint."
