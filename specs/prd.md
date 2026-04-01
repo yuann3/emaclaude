@@ -160,8 +160,8 @@ The developer clears the session. All agent buffers close, the daemon shuts down
 5. Session cleanup fully restores the previous Emacs state
 6. Other developers can install and use emaclaude via the documented setup process
 
-## Open Questions
+## Resolved Questions
 
-1. Should the Doom module be distributed via MELPA in the future, or always installed from the repo?
-2. Should emaclaude support multiple concurrent workflow sessions (e.g., working on two features in two different frames)?
-3. Should there be a dashboard or status buffer showing the current workflow state and loop count?
+1. **MELPA distribution?** — Yes, future goal. V1 installs from repo via `emaclaude setup`.
+2. **Multiple concurrent workflow sessions?** — No. The workflow is designed for focused, single-session human involvement. One feature at a time.
+3. **Dashboard/status buffer?** — Yes, add a status buffer showing current workflow state and loop count. Nice-to-have for v1, not blocking.
