@@ -54,10 +54,10 @@ impl Config {
 
         let mut figment = Figment::from(Serialized::defaults(Config::default()));
 
-        if let Some(path) = config_path {
-            if path.exists() {
-                figment = figment.merge(Toml::file(path));
-            }
+        if let Some(path) = config_path
+            && path.exists()
+        {
+            figment = figment.merge(Toml::file(path));
         }
 
         figment = figment.merge(Env::prefixed("EMACLAUDE_"));

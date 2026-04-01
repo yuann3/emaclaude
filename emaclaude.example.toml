@@ -1,0 +1,12 @@
+# Emaclaude configuration
+# Copy to ~/.config/emaclaude/config.toml
+
+port = 7878
+emacsclient_path = "emacsclient"
+confirmation_loops = 2
+
+[buffers]
+planning = "*mra-planning*"
+coding = "*mra-coding*"
+review = "*mra-review*"
+diff = "*mra-diff*"
