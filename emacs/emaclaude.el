@@ -70,16 +70,22 @@ CALLBACK is called with the response buffer if provided."
 ;;; --- Internal functions ---
 
 (defun emaclaude--spawn-buffer (name cmd)
-  "Create a vterm buffer named NAME and send CMD to it."
+  "Create a vterm buffer named NAME and send CMD to it.
+Always starts in the project root directory."
   (require 'vterm)
-  (let ((buf (get-buffer-create name)))
+  (let* ((default-directory (or (and (fboundp 'doom-project-root) (doom-project-root))
+                                (and (fboundp 'projectile-project-root) (projectile-project-root))
+                                default-directory))
+         (buf (get-buffer-create name)))
     (with-current-buffer buf
+      (setq default-directory default-directory)
       (unless (eq major-mode 'vterm-mode)
         (vterm-mode)))
     (display-buffer buf)
     (with-current-buffer buf
-      (vterm-send-string cmd)
-      (vterm-send-return))
+      (when (and cmd (not (string-empty-p cmd)))
+        (vterm-send-string cmd)
+        (vterm-send-return)))
     buf))
 
 (defun emaclaude--split-layout ()
