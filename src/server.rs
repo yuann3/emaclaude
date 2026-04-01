@@ -11,12 +11,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::config::Config;
+use crate::effects::EffectExecutor;
+use crate::emacs::EmacsBridge;
 use crate::state::{Comment, Event, ReviewStatus, WorkflowConfig, WorkflowState};
 
 pub struct AppState {
     pub workflow: WorkflowState,
     pub workflow_config: WorkflowConfig,
     pub config: Config,
+    pub executor: Arc<EffectExecutor>,
 }
 
 #[derive(Serialize)]
@@ -73,19 +76,26 @@ async fn planning_done(
     State(state): State<SharedState>,
     Json(body): Json<PlanningDoneRequest>,
 ) -> Json<OkResponse> {
-    let mut app = state.lock().await;
-    let event = Event::PlanningDone {
-        prompt: body.prompt,
-        spec_path: body.spec_path,
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let event = Event::PlanningDone {
+            prompt: body.prompt,
+            spec_path: body.spec_path,
+        };
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
     };
-    let transition = app.workflow.clone().next(event, &app.workflow_config);
-    for effect in &transition.effects {
-        tracing::info!(?effect, "side effect");
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
     }
-    app.workflow = transition.state;
     Json(OkResponse {
         status: "ok".to_string(),
-        state: format!("{:?}", app.workflow),
+        state: new_state,
     })
 }
 
@@ -93,18 +103,25 @@ async fn coding_done(
     State(state): State<SharedState>,
     Json(body): Json<CodingDoneRequest>,
 ) -> Json<OkResponse> {
-    let mut app = state.lock().await;
-    let event = Event::CodingDone {
-        branch: body.branch,
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let event = Event::CodingDone {
+            branch: body.branch,
+        };
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
     };
-    let transition = app.workflow.clone().next(event, &app.workflow_config);
-    for effect in &transition.effects {
-        tracing::info!(?effect, "side effect");
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
     }
-    app.workflow = transition.state;
     Json(OkResponse {
         status: "ok".to_string(),
-        state: format!("{:?}", app.workflow),
+        state: new_state,
     })
 }
 
@@ -112,23 +129,30 @@ async fn review_done(
     State(state): State<SharedState>,
     Json(body): Json<ReviewDoneRequest>,
 ) -> Json<OkResponse> {
-    let mut app = state.lock().await;
-    let status = match body.status.as_str() {
-        "approved" => ReviewStatus::Approved,
-        _ => ReviewStatus::ChangesNeeded,
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let status = match body.status.as_str() {
+            "approved" => ReviewStatus::Approved,
+            _ => ReviewStatus::ChangesNeeded,
+        };
+        let event = Event::ReviewDone {
+            status,
+            feedback: body.feedback,
+        };
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
     };
-    let event = Event::ReviewDone {
-        status,
-        feedback: body.feedback,
-    };
-    let transition = app.workflow.clone().next(event, &app.workflow_config);
-    for effect in &transition.effects {
-        tracing::info!(?effect, "side effect");
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
     }
-    app.workflow = transition.state;
     Json(OkResponse {
         status: "ok".to_string(),
-        state: format!("{:?}", app.workflow),
+        state: new_state,
     })
 }
 
@@ -136,39 +160,53 @@ async fn human_review(
     State(state): State<SharedState>,
     Json(body): Json<HumanReviewRequest>,
 ) -> Json<OkResponse> {
-    let mut app = state.lock().await;
-    let comments = body
-        .comments
-        .into_iter()
-        .map(|c| Comment {
-            file: c.file,
-            line: c.line,
-            text: c.text,
-        })
-        .collect();
-    let event = Event::HumanComments { comments };
-    let transition = app.workflow.clone().next(event, &app.workflow_config);
-    for effect in &transition.effects {
-        tracing::info!(?effect, "side effect");
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let comments = body
+            .comments
+            .into_iter()
+            .map(|c| Comment {
+                file: c.file,
+                line: c.line,
+                text: c.text,
+            })
+            .collect();
+        let event = Event::HumanComments { comments };
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
+    };
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
     }
-    app.workflow = transition.state;
     Json(OkResponse {
         status: "ok".to_string(),
-        state: format!("{:?}", app.workflow),
+        state: new_state,
     })
 }
 
 async fn create_pr(State(state): State<SharedState>) -> Json<OkResponse> {
-    let mut app = state.lock().await;
-    let event = Event::CreatePr;
-    let transition = app.workflow.clone().next(event, &app.workflow_config);
-    for effect in &transition.effects {
-        tracing::info!(?effect, "side effect");
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let event = Event::CreatePr;
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
+    };
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
     }
-    app.workflow = transition.state;
     Json(OkResponse {
         status: "ok".to_string(),
-        state: format!("{:?}", app.workflow),
+        state: new_state,
     })
 }
 
@@ -178,10 +216,14 @@ pub async fn create(config: Config) -> anyhow::Result<(SocketAddr, impl Future<O
         port: config.port,
     };
 
+    let bridge = EmacsBridge::new(config.emacsclient_path.clone());
+    let executor = Arc::new(EffectExecutor::new(bridge, config.clone()));
+
     let shared_state: SharedState = Arc::new(Mutex::new(AppState {
         workflow: WorkflowState::Idle,
         workflow_config,
         config: config.clone(),
+        executor,
     }));
 
     let app = Router::new()
