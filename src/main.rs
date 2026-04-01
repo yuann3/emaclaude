@@ -52,14 +52,25 @@ async fn main() -> Result<()> {
 
 fn setup() -> Result<()> {
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    let skills_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("skills");
-    let skills_dst = home.join(".claude").join("skills").join("emaclaude");
+    // Symlink each skill directory individually into ~/.claude/skills/
+    let skills_src = manifest_dir.join("skills");
+    let skills_parent = home.join(".claude").join("skills");
+    std::fs::create_dir_all(&skills_parent)?;
 
-    let emacs_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("emacs");
+    for entry in std::fs::read_dir(&skills_src)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            let name = entry.file_name();
+            let dst = skills_parent.join(&name);
+            symlink_dir(&entry.path(), &dst)?;
+        }
+    }
+
+    // Symlink Doom module
+    let emacs_src = manifest_dir.join("emacs");
     let emacs_dst = home.join(".doom.d").join("modules").join("tools").join("emaclaude");
-
-    symlink_dir(&skills_src, &skills_dst)?;
     symlink_dir(&emacs_src, &emacs_dst)?;
 
     tracing::info!("setup complete");
