@@ -115,12 +115,15 @@ Always starts in the project root directory."
         (vterm-send-return)))))
 
 (defun emaclaude--open-diff-view ()
-  "Open a magit diff showing all local changes (staged + unstaged)."
+  "Open a magit diff showing all local changes (staged + unstaged).
+Expands all file sections so changes are visible per-file."
   (require 'magit)
   (let ((win (car (last (window-list)))))
     (select-window win)
     (magit-diff-working-tree "HEAD")
     (rename-buffer emaclaude-buffer-diff t)
+    ;; Expand all file sections so diffs are visible
+    (magit-section-show-level-4-all)
     (emaclaude-review-mode 1)))
 
 (defun emaclaude--refresh-diff ()
@@ -243,19 +246,38 @@ Always starts in the project root directory."
   "Remove all emaclaude comment overlays from the current buffer."
   (remove-overlays (point-min) (point-max) 'emaclaude-comment t))
 
-(defun emaclaude-add-comment ()
-  "Prompt for a comment at the current hunk and store it."
-  (interactive)
+(defun emaclaude-add-comment (beg end)
+  "Prompt for a review comment on the current line or visual selection.
+Works with evil visual line mode (Shift-V): select lines, then SPC m c."
+  (interactive
+   (if (and (bound-and-true-p evil-mode)
+            (evil-visual-state-p))
+       (list (region-beginning) (region-end))
+     (list (line-beginning-position) (line-end-position))))
   (let* ((file (or (magit-file-at-point) "unknown"))
-         (line (line-number-at-pos))
-         (text (read-string (format "Comment on %s:%d: " file line)))
-         (ov (make-overlay (line-beginning-position) (line-end-position))))
+         (start-line (line-number-at-pos beg))
+         (end-line (line-number-at-pos (max beg (1- end))))
+         (line-desc (if (= start-line end-line)
+                        (format "%d" start-line)
+                      (format "%d-%d" start-line end-line)))
+         (text (read-string (format "Comment on %s:%s: " file line-desc)))
+         (ov (make-overlay beg end)))
     (overlay-put ov 'emaclaude-comment t)
     (overlay-put ov 'after-string
-                 (propertize (format "  # %s" text)
-                             'face 'font-lock-comment-face))
-    (push `((file . ,file) (line . ,line) (text . ,text)) emaclaude--review-comments)
-    (emaclaude--notify (format "comment added on %s:%d" file line))))
+                 (propertize (format "\n  💬 %s" text)
+                             'face '(:foreground "#98be65" :slant italic)))
+    (push `((file . ,file)
+            (line . ,start-line)
+            (end_line . ,end-line)
+            (text . ,text))
+          emaclaude--review-comments)
+    ;; Exit visual state if in evil
+    (when (and (bound-and-true-p evil-mode)
+               (evil-visual-state-p))
+      (evil-normal-state))
+    (emaclaude--notify (format "comment added on %s:%s (%d total)"
+                               file line-desc
+                               (length emaclaude--review-comments)))))
 
 (defun emaclaude-submit-comments ()
   "POST all review comments to the daemon /human-review endpoint."
