@@ -144,6 +144,7 @@ CALLBACK is called with the response buffer if provided."
   (setq emaclaude--daemon-process
         (start-process "emaclaude-daemon" "*emaclaude-daemon*"
                        emaclaude-daemon-path
+                       "serve"
                        "--port" (number-to-string emaclaude-port)))
   (set-process-sentinel emaclaude--daemon-process
                         (lambda (proc event)

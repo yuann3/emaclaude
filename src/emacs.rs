@@ -21,7 +21,10 @@ impl EmacsBridge {
     // ── pure elisp-generation helpers ────────────────────────────────────────
 
     fn escape(s: &str) -> String {
-        s.replace('\\', "\\\\").replace('"', "\\\"")
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
     }
 
     pub fn send_to_buffer_elisp(&self, buffer_name: &str, text: &str) -> String {

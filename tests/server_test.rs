@@ -69,17 +69,7 @@ async fn full_workflow_via_http() {
     let body: Value = resp.json().await.unwrap();
     assert!(body["state"].as_str().unwrap().contains("Confirming"));
 
-    // Third confirmation approval -> Confirming { approval_count: 3 }
-    let resp = client
-        .post(format!("{}/review-done", base))
-        .json(&serde_json::json!({ "status": "approved", "feedback": "" }))
-        .send()
-        .await
-        .unwrap();
-    let body: Value = resp.json().await.unwrap();
-    assert!(body["state"].as_str().unwrap().contains("Confirming"));
-
-    // Fourth approval -> approval_count (3) >= confirmation_loops (3) -> HumanReview
+    // Third approval -> approval_count(2) >= confirmation_loops(2) -> HumanReview
     let resp = client
         .post(format!("{}/review-done", base))
         .json(&serde_json::json!({ "status": "approved", "feedback": "" }))

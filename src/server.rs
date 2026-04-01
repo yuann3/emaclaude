@@ -189,6 +189,37 @@ async fn human_review(
     })
 }
 
+#[derive(Deserialize)]
+struct AddressReviewsRequest {
+    pr_number: u64,
+}
+
+async fn address_reviews(
+    State(state): State<SharedState>,
+    Json(body): Json<AddressReviewsRequest>,
+) -> Json<OkResponse> {
+    let (effects, executor, new_state) = {
+        let mut app = state.lock().await;
+        let event = Event::AddressGithubReviews {
+            pr_number: body.pr_number,
+        };
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        let state_str = format!("{:?}", app.workflow);
+        (transition.effects, Arc::clone(&app.executor), state_str)
+    };
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
+    }
+    Json(OkResponse {
+        status: "ok".to_string(),
+        state: new_state,
+    })
+}
+
 async fn create_pr(State(state): State<SharedState>) -> Json<OkResponse> {
     let (effects, executor, new_state) = {
         let mut app = state.lock().await;
@@ -233,6 +264,7 @@ pub async fn create(config: Config) -> anyhow::Result<(SocketAddr, impl Future<O
         .route("/review-done", post(review_done))
         .route("/human-review", post(human_review))
         .route("/create-pr", post(create_pr))
+        .route("/address-reviews", post(address_reviews))
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", config.port)).await?;

@@ -16,10 +16,10 @@ pub struct BufferNames {
 impl Default for BufferNames {
     fn default() -> Self {
         Self {
-            planning: "*emaclaude-planning*".to_string(),
-            coding: "*emaclaude-coding*".to_string(),
-            review: "*emaclaude-review*".to_string(),
-            diff: "*emaclaude-diff*".to_string(),
+            planning: "*mra-planning*".to_string(),
+            coding: "*mra-coding*".to_string(),
+            review: "*mra-review*".to_string(),
+            diff: "*mra-diff*".to_string(),
         }
     }
 }
@@ -35,9 +35,9 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            port: 3737,
+            port: 7878,
             emacsclient_path: "emacsclient".to_string(),
-            confirmation_loops: 3,
+            confirmation_loops: 2,
             buffers: BufferNames::default(),
         }
     }
