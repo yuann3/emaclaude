@@ -11,7 +11,7 @@ for now, is using Doom Module so its kinda *DOOM EMACS ONLY*, but i will change 
 
 * how it works
 
-you plan in one buffer. when you're done, you hit ~/planning-done~ and the system spawns a coding agent and a review agent in two more buffers. the coding agent implements your spec. when it finishes, the review agent checks the code for quality, security, redundant junk, and spec compliance. if the review agent finds problems, it sends feedback back to the coding agent. they loop until the review agent approves twice in a row (we run confirmation passes because sometimes the reviewer hallucinates an approval).
+you plan in one buffer, write spec and PRD with claude. when you're done, hit ~/planning-done~ and the system spawns a coding agent and a review agent in two more buffers. the coding agent implements your spec. when it finishes, the review agent checks the code for quality, security, redundant junk, and spec compliance. if the review agent finds problems, it sends feedback back to the coding agent. they loop until the review agent approves twice in a row (we run confirmation passes because sometimes the reviewer hallucinates an approval).
 
 when the loop finishes, a magit diff view opens on the right side of your frame. you can read through the changes, select lines with ~V~, hit ~SPC m c~ to leave comments, and ~SPC m s~ to send them to the coding agent for fixes. when you're happy, ~SPC m p~ creates the PR.
 
