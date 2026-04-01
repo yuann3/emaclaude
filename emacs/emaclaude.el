@@ -154,6 +154,12 @@ Always starts in the project root directory."
 ;;; --- Public interactive commands ---
 
 ;;;###autoload
+(defun emaclaude-open-diff ()
+  "Open the emaclaude diff review view showing local staged+unstaged changes."
+  (interactive)
+  (emaclaude--open-diff-view))
+
+;;;###autoload
 (defun emaclaude-launch ()
   "Save window configuration, start the emaclaude daemon, and spawn the planning vterm."
   (interactive)
