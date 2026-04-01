@@ -114,13 +114,25 @@ Always starts in the project root directory."
         (vterm-send-string text)
         (vterm-send-return)))))
 
+(defun emaclaude--diff-base ()
+  "Determine the base ref for the diff view.
+If the current branch has an upstream, diff against it to show unpushed
+commits plus working tree changes. Otherwise fall back to HEAD."
+  (or (magit-get-upstream-ref)
+      "HEAD"))
+
 (defun emaclaude--open-diff-view ()
-  "Open a magit diff showing all local changes (staged + unstaged).
+  "Open a magit diff showing all local changes vs remote.
+Includes unpushed commits, staged changes, and unstaged changes.
 Expands all file sections so changes are visible per-file."
   (require 'magit)
-  (let ((win (car (last (window-list)))))
+  (let ((win (car (last (window-list))))
+        (base (emaclaude--diff-base)))
     (select-window win)
-    (magit-diff-working-tree "HEAD")
+    (magit-diff-range (format "%s..HEAD" base))
+    ;; If there are also uncommitted changes, show a combined view
+    ;; by using the working tree diff against the upstream
+    (magit-diff-working-tree base)
     (rename-buffer emaclaude-buffer-diff t)
     ;; Expand all file sections so diffs are visible
     (magit-section-show-level-4-all)
