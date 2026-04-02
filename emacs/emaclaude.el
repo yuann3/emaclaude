@@ -166,6 +166,17 @@ Expands all file sections so changes are visible per-file."
   "Alias for `emaclaude-clear-session'."
   (emaclaude-clear-session))
 
+(defun emaclaude--kill-stale-daemon ()
+  "Kill any process listening on `emaclaude-port'.
+Uses lsof to find and kill orphaned daemon processes."
+  (let ((output (shell-command-to-string
+                 (format "lsof -ti tcp:%d" emaclaude-port))))
+    (dolist (pid (split-string (string-trim output) "\n" t))
+      (when (string-match-p "^[0-9]+$" pid)
+        (ignore-errors
+          (signal-process (string-to-number pid) 'KILL))
+        (emaclaude--notify (format "killed stale daemon pid %s" pid))))))
+
 ;;; --- Public interactive commands ---
 
 ;;;###autoload
@@ -179,6 +190,8 @@ Expands all file sections so changes are visible per-file."
   "Save window configuration, start the emaclaude daemon, and spawn the planning vterm."
   (interactive)
   (setq emaclaude--saved-window-config (current-window-configuration))
+  ;; Kill any orphaned daemon still holding the port
+  (emaclaude--kill-stale-daemon)
   ;; Start the daemon process
   (setq emaclaude--daemon-process
         (start-process "emaclaude-daemon" "*emaclaude-daemon*"
@@ -196,6 +209,9 @@ Expands all file sections so changes are visible per-file."
 (defun emaclaude-clear-session ()
   "Send /exit to all vterm buffers, kill them after timeout, stop daemon, restore windows."
   (interactive)
+  ;; Tell the daemon to clear state and shut down gracefully
+  (ignore-errors
+    (emaclaude--post "/clear-session" nil))
   ;; Send /exit to each agent buffer
   (dolist (name (list emaclaude-buffer-planning
                       emaclaude-buffer-coding
@@ -219,11 +235,12 @@ Expands all file sections so changes are visible per-file."
                          (when proc
                            (set-process-query-on-exit-flag proc nil)))
                        (kill-buffer buf))))))
-  ;; Stop daemon
+  ;; Stop daemon — kill process and any orphan on the port
   (when (and emaclaude--daemon-process
              (process-live-p emaclaude--daemon-process))
-    (kill-process emaclaude--daemon-process)
-    (setq emaclaude--daemon-process nil))
+    (kill-process emaclaude--daemon-process))
+  (setq emaclaude--daemon-process nil)
+  (emaclaude--kill-stale-daemon)
   ;; Restore window configuration
   (when emaclaude--saved-window-config
     (set-window-configuration emaclaude--saved-window-config)

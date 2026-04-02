@@ -220,6 +220,26 @@ async fn address_reviews(
     })
 }
 
+async fn clear_session(State(state): State<SharedState>) -> Json<OkResponse> {
+    let (effects, executor) = {
+        let mut app = state.lock().await;
+        let event = Event::ClearSession;
+        let transition = app.workflow.clone().next(event, &app.workflow_config);
+        for effect in &transition.effects {
+            tracing::info!(?effect, "side effect");
+        }
+        app.workflow = transition.state;
+        (transition.effects, Arc::clone(&app.executor))
+    };
+    if let Err(e) = executor.execute(effects).await {
+        tracing::error!("effect execution error: {e:#}");
+    }
+    Json(OkResponse {
+        status: "ok".to_string(),
+        state: "Idle".to_string(),
+    })
+}
+
 async fn create_pr(State(state): State<SharedState>) -> Json<OkResponse> {
     let (effects, executor, new_state) = {
         let mut app = state.lock().await;
@@ -264,6 +284,7 @@ pub async fn create(config: Config) -> anyhow::Result<(SocketAddr, impl Future<O
         .route("/review-done", post(review_done))
         .route("/human-review", post(human_review))
         .route("/create-pr", post(create_pr))
+        .route("/clear-session", post(clear_session))
         .route("/address-reviews", post(address_reviews))
         .with_state(shared_state);
 

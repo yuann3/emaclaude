@@ -61,7 +61,13 @@ impl EffectExecutor {
                 self.bridge.notify(&message).await?;
             }
             SideEffect::Shutdown => {
-                self.bridge.shutdown().await?;
+                tracing::info!("Shutdown effect: exiting daemon process");
+                // Exit the daemon process so the port is freed.
+                // Use a short delay to let the HTTP response flush first.
+                tokio::spawn(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    std::process::exit(0);
+                });
             }
         }
         Ok(())

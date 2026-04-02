@@ -118,3 +118,34 @@ async fn review_loop_with_changes() {
     assert_eq!(body["status"], "ok");
     assert_eq!(body["state"], "Coding");
 }
+
+#[tokio::test]
+async fn clear_session_resets_to_idle() {
+    let port = spawn_server().await;
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{}", port);
+
+    // Advance to Coding state
+    client
+        .post(format!("{}/planning-done", base))
+        .json(&serde_json::json!({ "prompt": "build feature", "spec_path": "/tmp/spec.md" }))
+        .send()
+        .await
+        .unwrap();
+
+    // Verify we're in Coding
+    let resp = reqwest::get(format!("{}/health", base)).await.unwrap();
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["state"], "Coding");
+
+    // Clear session -> Idle
+    let resp = client
+        .post(format!("{}/clear-session", base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["state"], "Idle");
+}
