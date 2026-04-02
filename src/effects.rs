@@ -61,9 +61,13 @@ impl EffectExecutor {
                 self.bridge.notify(&message).await?;
             }
             SideEffect::Shutdown => {
-                tracing::info!("Shutdown effect: exiting daemon process");
+                tracing::info!("Shutdown effect: clearing Emacs session and exiting");
+                // Tell Emacs to clean up buffers/windows
+                if let Err(e) = self.bridge.shutdown().await {
+                    tracing::warn!("failed to notify Emacs of shutdown: {e:#}");
+                }
                 // Exit the daemon process so the port is freed.
-                // Use a short delay to let the HTTP response flush first.
+                // Short delay to let the HTTP response flush.
                 tokio::spawn(async {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     std::process::exit(0);

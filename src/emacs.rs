@@ -64,7 +64,7 @@ impl EmacsBridge {
     }
 
     pub fn shutdown_elisp(&self) -> String {
-        "(emaclaude--clear-session)".to_string()
+        "(emaclaude--cleanup-buffers-and-windows)".to_string()
     }
 
     // ── async helpers ─────────────────────────────────────────────────────────

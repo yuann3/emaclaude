@@ -162,9 +162,44 @@ Expands all file sections so changes are visible per-file."
             (insert (propertize (format "PR: %s\n\n" url)
                                 'face 'link))))))))
 
+(defun emaclaude--cleanup-buffers-and-windows ()
+  "Clean up agent buffers and restore window configuration.
+Called by the daemon's Shutdown effect via emacsclient.
+Does NOT contact the daemon (to avoid circular calls)."
+  ;; Send /exit to each agent buffer
+  (dolist (name (list emaclaude-buffer-planning
+                      emaclaude-buffer-coding
+                      emaclaude-buffer-review))
+    (let ((buf (get-buffer name)))
+      (when (and buf (buffer-live-p buf))
+        (with-current-buffer buf
+          (when (eq major-mode 'vterm-mode)
+            (vterm-send-string "/exit")
+            (vterm-send-return))))))
+  ;; Kill buffers after 5 second timeout
+  (run-at-time 5 nil
+               (lambda ()
+                 (dolist (name (list emaclaude-buffer-planning
+                                     emaclaude-buffer-coding
+                                     emaclaude-buffer-review
+                                     emaclaude-buffer-diff))
+                   (let ((buf (get-buffer name)))
+                     (when (and buf (buffer-live-p buf))
+                       (let ((proc (get-buffer-process buf)))
+                         (when proc
+                           (set-process-query-on-exit-flag proc nil)))
+                       (kill-buffer buf))))))
+  ;; Clear the process reference (daemon is shutting itself down)
+  (setq emaclaude--daemon-process nil)
+  ;; Restore window configuration
+  (when emaclaude--saved-window-config
+    (set-window-configuration emaclaude--saved-window-config)
+    (setq emaclaude--saved-window-config nil))
+  (emaclaude--notify "session cleared"))
+
 (defun emaclaude--clear-session ()
-  "Alias for `emaclaude-clear-session'."
-  (emaclaude-clear-session))
+  "Called by the daemon Shutdown effect to clean up Emacs state."
+  (emaclaude--cleanup-buffers-and-windows))
 
 (defun emaclaude--kill-stale-daemon ()
   "Kill any process listening on `emaclaude-port'.
@@ -212,40 +247,14 @@ Uses lsof to find and kill orphaned daemon processes."
   ;; Tell the daemon to clear state and shut down gracefully
   (ignore-errors
     (emaclaude--post "/clear-session" nil))
-  ;; Send /exit to each agent buffer
-  (dolist (name (list emaclaude-buffer-planning
-                      emaclaude-buffer-coding
-                      emaclaude-buffer-review))
-    (let ((buf (get-buffer name)))
-      (when (and buf (buffer-live-p buf))
-        (with-current-buffer buf
-          (when (eq major-mode 'vterm-mode)
-            (vterm-send-string "/exit")
-            (vterm-send-return))))))
-  ;; Kill buffers after 5 second timeout, suppress "process running" prompt
-  (run-at-time 5 nil
-               (lambda ()
-                 (dolist (name (list emaclaude-buffer-planning
-                                     emaclaude-buffer-coding
-                                     emaclaude-buffer-review
-                                     emaclaude-buffer-diff))
-                   (let ((buf (get-buffer name)))
-                     (when (and buf (buffer-live-p buf))
-                       (let ((proc (get-buffer-process buf)))
-                         (when proc
-                           (set-process-query-on-exit-flag proc nil)))
-                       (kill-buffer buf))))))
-  ;; Stop daemon — kill process and any orphan on the port
+  ;; Stop daemon process from Emacs side too
   (when (and emaclaude--daemon-process
              (process-live-p emaclaude--daemon-process))
     (kill-process emaclaude--daemon-process))
-  (setq emaclaude--daemon-process nil)
+  ;; Kill any orphaned daemon on the port
   (emaclaude--kill-stale-daemon)
-  ;; Restore window configuration
-  (when emaclaude--saved-window-config
-    (set-window-configuration emaclaude--saved-window-config)
-    (setq emaclaude--saved-window-config nil))
-  (emaclaude--notify "session cleared"))
+  ;; Clean up buffers and restore windows
+  (emaclaude--cleanup-buffers-and-windows))
 
 ;;;###autoload
 (defun emaclaude-address-github-reviews ()
