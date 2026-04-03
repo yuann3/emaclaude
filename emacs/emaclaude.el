@@ -5,6 +5,7 @@
 
 (require 'json)
 (require 'url)
+(require 'agent-shell)
 
 ;;; --- Customization group ---
 
@@ -48,6 +49,9 @@
 (defvar emaclaude--daemon-process nil
   "Process object for the running emaclaude daemon.")
 
+(defvar emaclaude--selected-agent-config nil
+  "The agent-shell config selected at launch time.")
+
 (defvar emaclaude--saved-window-config nil
   "Window configuration saved before launching emaclaude.")
 
@@ -69,23 +73,17 @@ CALLBACK is called with the response buffer if provided."
 
 ;;; --- Internal functions ---
 
-(defun emaclaude--spawn-buffer (name cmd)
-  "Create a vterm buffer named NAME and send CMD to it.
-Always starts in the project root directory."
-  (require 'vterm)
+(defun emaclaude--spawn-buffer (name config)
+  "Create an agent-shell buffer for NAME using agent CONFIG.
+Starts the agent-shell session via ACP and renames the buffer to NAME.
+CONFIG is an agent-shell agent configuration alist."
   (let* ((default-directory (or (and (fboundp 'doom-project-root) (doom-project-root))
                                 (and (fboundp 'projectile-project-root) (projectile-project-root))
                                 default-directory))
-         (buf (get-buffer-create name)))
-    (with-current-buffer buf
-      (setq default-directory default-directory)
-      (unless (eq major-mode 'vterm-mode)
-        (vterm-mode)))
-    (display-buffer buf)
-    (with-current-buffer buf
-      (when (and cmd (not (string-empty-p cmd)))
-        (vterm-send-string cmd)
-        (vterm-send-return)))
+         (buf (agent-shell-start :config config)))
+    (when (and buf (buffer-live-p buf))
+      (with-current-buffer buf
+        (rename-buffer name t)))
     buf))
 
 (defun emaclaude--split-layout ()
@@ -106,13 +104,11 @@ Always starts in the project root directory."
   (select-window (get-buffer-window emaclaude-buffer-planning)))
 
 (defun emaclaude--send-to-buffer (name text)
-  "Send TEXT followed by return to the vterm buffer named NAME."
-  (require 'vterm)
+  "Send TEXT to the agent-shell buffer named NAME.
+Uses agent-shell-insert to submit the text as a prompt."
   (let ((buf (get-buffer name)))
     (when buf
-      (with-current-buffer buf
-        (vterm-send-string text)
-        (vterm-send-return)))))
+      (agent-shell-insert :text text :submit t :shell-buffer buf))))
 
 (defun emaclaude--diff-base ()
   "Determine the base ref for the diff view.
@@ -166,31 +162,20 @@ Expands all file sections so changes are visible per-file."
   "Clean up agent buffers and restore window configuration.
 Called by the daemon's Shutdown effect via emacsclient.
 Does NOT contact the daemon (to avoid circular calls)."
-  ;; Send /exit to each agent buffer
+  ;; Kill agent-shell buffers (agent-shell handles its own ACP cleanup)
   (dolist (name (list emaclaude-buffer-planning
                       emaclaude-buffer-coding
-                      emaclaude-buffer-review))
+                      emaclaude-buffer-review
+                      emaclaude-buffer-diff))
     (let ((buf (get-buffer name)))
       (when (and buf (buffer-live-p buf))
-        (with-current-buffer buf
-          (when (eq major-mode 'vterm-mode)
-            (vterm-send-string "/exit")
-            (vterm-send-return))))))
-  ;; Kill buffers after 5 second timeout
-  (run-at-time 5 nil
-               (lambda ()
-                 (dolist (name (list emaclaude-buffer-planning
-                                     emaclaude-buffer-coding
-                                     emaclaude-buffer-review
-                                     emaclaude-buffer-diff))
-                   (let ((buf (get-buffer name)))
-                     (when (and buf (buffer-live-p buf))
-                       (let ((proc (get-buffer-process buf)))
-                         (when proc
-                           (set-process-query-on-exit-flag proc nil)))
-                       (kill-buffer buf))))))
-  ;; Clear the process reference (daemon is shutting itself down)
+        (let ((proc (get-buffer-process buf)))
+          (when proc
+            (set-process-query-on-exit-flag proc nil)))
+        (kill-buffer buf))))
+  ;; Clear state
   (setq emaclaude--daemon-process nil)
+  (setq emaclaude--selected-agent-config nil)
   ;; Restore window configuration
   (when emaclaude--saved-window-config
     (set-window-configuration emaclaude--saved-window-config)
@@ -222,27 +207,26 @@ Uses lsof to find and kill orphaned daemon processes."
 
 ;;;###autoload
 (defun emaclaude-launch ()
-  "Save window configuration, start the emaclaude daemon, and spawn the planning vterm."
+  "Prompt for an LLM backend and spawn an agent-shell planning buffer.
+The user selects from available agent-shell backends via completing-read.
+The resulting buffer is named `emaclaude-buffer-planning'."
   (interactive)
   (setq emaclaude--saved-window-config (current-window-configuration))
-  ;; Kill any orphaned daemon still holding the port
-  (emaclaude--kill-stale-daemon)
-  ;; Start the daemon process
-  (setq emaclaude--daemon-process
-        (start-process "emaclaude-daemon" "*emaclaude-daemon*"
-                       emaclaude-daemon-path
-                       "serve"
-                       "--port" (number-to-string emaclaude-port)))
-  (set-process-sentinel emaclaude--daemon-process
-                        (lambda (proc event)
-                          (emaclaude--notify (format "daemon %s" (string-trim event)))))
-  (emaclaude--notify (format "daemon started on port %d" emaclaude-port))
-  ;; Spawn the planning buffer
-  (emaclaude--spawn-buffer emaclaude-buffer-planning "claude"))
+  ;; Prompt user to select an LLM backend from agent-shell configs
+  (let ((config (agent-shell-select-config :prompt "Select LLM backend: ")))
+    (unless config
+      (user-error "No agent config selected"))
+    (setq emaclaude--selected-agent-config config)
+    (emaclaude--notify (format "launching with %s"
+                               (or (map-elt config :mode-line-name)
+                                   (map-elt config :buffer-name)
+                                   "unknown agent")))
+    ;; Spawn the planning buffer via agent-shell
+    (emaclaude--spawn-buffer emaclaude-buffer-planning config)))
 
 ;;;###autoload
 (defun emaclaude-clear-session ()
-  "Send /exit to all vterm buffers, kill them after timeout, stop daemon, restore windows."
+  "Kill all agent buffers, stop daemon, restore windows."
   (interactive)
   ;; Tell the daemon to clear state and shut down gracefully
   (ignore-errors
