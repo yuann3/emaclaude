@@ -111,6 +111,26 @@ Uses agent-shell-insert to submit the text as a prompt."
     (when buf
       (agent-shell-insert :text text :submit t :shell-buffer buf))))
 
+(defun emaclaude-spawn-agent (name)
+  "Spawn an agent-shell buffer with NAME using the stored config.
+Uses `emaclaude--selected-agent-config' set during `emaclaude-launch'.
+Signals an error if no config has been selected."
+  (unless emaclaude--selected-agent-config
+    (user-error "No agent config selected; run `emaclaude-launch' first"))
+  (emaclaude--spawn-buffer name emaclaude--selected-agent-config))
+
+(defun emaclaude-send-to-agent (name message)
+  "Send MESSAGE to the agent-shell buffer named NAME.
+If the agent is busy, enqueue MESSAGE for automatic delivery.
+Returns nil if the buffer does not exist."
+  (let ((buf (get-buffer name)))
+    (when buf
+      (with-current-buffer buf
+        (if (shell-maker-busy)
+            (agent-shell--enqueue-request :prompt message)
+          (shell-maker-submit :input message)))
+      t)))
+
 (defun emaclaude--diff-base ()
   "Determine the base ref for the diff view.
 If the current branch has an upstream, diff against it to show unpushed
@@ -222,12 +242,15 @@ The resulting buffer is named `emaclaude-buffer-planning'."
                                (or (map-elt config :mode-line-name)
                                    (map-elt config :buffer-name)
                                    "unknown agent")))
-    ;; Spawn the planning buffer via agent-shell.
+    ;; Spawn all three agent buffers via agent-shell.
     ;; NOTE: No daemon startup here — this is intentional.  The Rust daemon is
     ;; being converted to a stateless CLI in Phase 4; HTTP-dependent commands
     ;; (diff view, PR creation, review submission) will be rewritten in
     ;; Phases 5-7.  This is NOT a regression but a deliberate migration step.
-    (emaclaude--spawn-buffer emaclaude-buffer-planning config)))
+    (emaclaude--spawn-buffer emaclaude-buffer-planning config)
+    (emaclaude--spawn-buffer emaclaude-buffer-coding config)
+    (emaclaude--spawn-buffer emaclaude-buffer-review config)
+    (emaclaude--split-layout)))
 
 ;;;###autoload
 (defun emaclaude-clear-session ()
