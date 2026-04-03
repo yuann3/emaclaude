@@ -212,11 +212,11 @@ Uses lsof to find and kill orphaned daemon processes."
 The user selects from available agent-shell backends via completing-read.
 The resulting buffer is named `emaclaude-buffer-planning'."
   (interactive)
-  (setq emaclaude--saved-window-config (current-window-configuration))
   ;; Prompt user to select an LLM backend from agent-shell configs
   (let ((config (agent-shell-select-config :prompt "Select LLM backend: ")))
     (unless config
       (user-error "No agent config selected"))
+    (setq emaclaude--saved-window-config (current-window-configuration))
     (setq emaclaude--selected-agent-config config)
     (emaclaude--notify (format "launching with %s"
                                (or (map-elt config :mode-line-name)
