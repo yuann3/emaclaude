@@ -66,6 +66,22 @@ Replace vterm with agent-shell (ACP protocol). Restructure the Rust daemon into 
 - **ERT test suite** — orchestrator tests, message routing tests
 - **`packages.el`** — declares `agent-shell` instead of `vterm`
 
+### Claude Code Skills (v2)
+
+Skills are rewritten to use `emaclaude-signal` instead of `curl POST`. Created alongside `bin/emaclaude-signal` in migration step 4.
+
+| Skill | Purpose | Signal |
+|-------|---------|--------|
+| `planning-done` | **Rewrite.** Finds spec, composes prompt, signals handoff to coding/review | `emaclaude-signal planning-done '{"prompt":"...", "spec_path":"..."}'` |
+| `coding-done` | **New.** Coding agent calls this when implementation is complete | `emaclaude-signal coding-done '{"branch":"..."}'` |
+| `review-done` | **New.** Review agent calls this with approval or feedback | `emaclaude-signal review-done '{"status":"approved"}' or '{"status":"changes_needed","feedback":"..."}'` |
+
+**Key changes from v1 skills:**
+- No `curl` or HTTP — all signaling goes through `emaclaude-signal` → `emacsclient --eval`
+- No hardcoded port numbers
+- `coding-done` and `review-done` are now explicit skills rather than raw curl commands embedded in state machine prompts
+- The Rust state machine's `SideEffect` prompt text references these skill names so agents know what to call
+
 ## System Workflow Diagram
 
 ```
@@ -320,13 +336,14 @@ Replace vterm with agent-shell (ACP protocol). Restructure the Rust daemon into 
 1. Get single Claude Code session running in agent-shell
 2. **Verify lag is gone** (critical checkpoint)
 3. Add multi-agent spawning (three agent-shell buffers)
-4. Build `emaclaude-signal` CLI tool
-5. Port state machine invocation to elisp (JSON pipe to Rust CLI)
-6. Build effect executor in elisp
-7. Re-integrate magit review workflow
-8. Add JSONL logging + watchdog
-9. Write ERT tests
-10. Retire vterm + daemon code
+4. Build `bin/emaclaude-signal` CLI tool + rewrite/create all skills (`planning-done`, `coding-done`, `review-done`)
+5. Update Rust state machine prompt text to reference `emaclaude-signal` instead of `curl`
+6. Port state machine invocation to elisp (JSON pipe to Rust CLI)
+7. Build effect executor in elisp
+8. Re-integrate magit review workflow
+9. Add JSONL logging + watchdog
+10. Write ERT tests
+11. Retire vterm + daemon code
 
 ## References
 
