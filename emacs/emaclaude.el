@@ -127,6 +127,8 @@ Returns nil if the buffer does not exist."
     (when buf
       (with-current-buffer buf
         (if (shell-maker-busy)
+            ;; NOTE: agent-shell--enqueue-request is a private API.
+            ;; No public queueing API exists as of agent-shell 0.33.
             (agent-shell--enqueue-request :prompt message)
           (shell-maker-submit :input message)))
       t)))

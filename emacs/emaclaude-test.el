@@ -163,6 +163,53 @@
           (should (eq t (emaclaude-send-to-agent (buffer-name buf) "msg")))
         (kill-buffer buf)))))
 
+;;; --- emaclaude-launch integration tests ---
+
+(ert-deftest emaclaude-test-launch-saves-window-config ()
+  "emaclaude-launch should save window configuration after config selection."
+  (let ((emaclaude--saved-window-config nil)
+        (emaclaude--selected-agent-config nil)
+        (tmp-buf (generate-new-buffer "*test-launch-wc*")))
+    (cl-letf (((symbol-function 'agent-shell-select-config)
+               (lambda (&rest _) '((:model . "test"))))
+              ((symbol-function 'agent-shell-start)
+               (lambda (&rest _) tmp-buf))
+              ((symbol-function 'emaclaude--split-layout) #'ignore))
+      (unwind-protect
+          (progn
+            (emaclaude-launch)
+            (should (not (null emaclaude--saved-window-config))))
+        (setq emaclaude--saved-window-config nil)
+        (setq emaclaude--selected-agent-config nil)
+        (when (buffer-live-p tmp-buf) (kill-buffer tmp-buf))
+        (dolist (name (list emaclaude-buffer-planning
+                            emaclaude-buffer-coding
+                            emaclaude-buffer-review))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+(ert-deftest emaclaude-test-launch-spawns-three-buffers ()
+  "emaclaude-launch should spawn planning, coding, and review buffers."
+  (let ((emaclaude--selected-agent-config nil)
+        (spawned-names nil))
+    (cl-letf (((symbol-function 'agent-shell-select-config)
+               (lambda (&rest _) '((:model . "test"))))
+              ((symbol-function 'emaclaude--spawn-buffer)
+               (lambda (name _config)
+                 (push name spawned-names)
+                 (generate-new-buffer name)))
+              ((symbol-function 'emaclaude--split-layout) #'ignore))
+      (unwind-protect
+          (progn
+            (emaclaude-launch)
+            (should (member emaclaude-buffer-planning spawned-names))
+            (should (member emaclaude-buffer-coding spawned-names))
+            (should (member emaclaude-buffer-review spawned-names)))
+        (setq emaclaude--selected-agent-config nil)
+        (dolist (name (list emaclaude-buffer-planning
+                            emaclaude-buffer-coding
+                            emaclaude-buffer-review))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
 ;;; --- emaclaude--split-layout tests ---
 
 (ert-deftest emaclaude-test-split-layout-creates-three-windows ()
