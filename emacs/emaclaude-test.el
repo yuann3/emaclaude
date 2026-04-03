@@ -1,6 +1,7 @@
 ;;; emaclaude-test.el --- ERT tests for emaclaude Phase 1 -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'cl-lib)
 
 ;; We can't require agent-shell in test environment, so mock what we need
 (unless (featurep 'agent-shell)
@@ -61,6 +62,13 @@
 (ert-deftest emaclaude-test-planning-buffer-name ()
   "emaclaude-buffer-planning should default to *mra-planning*."
   (should (string= emaclaude-buffer-planning "*mra-planning*")))
+
+;;; --- Launch error handling ---
+
+(ert-deftest emaclaude-test-launch-errors-on-no-selection ()
+  "emaclaude-launch should signal user-error when no config selected."
+  (cl-letf (((symbol-function 'agent-shell-select-config) (lambda (&rest _) nil)))
+    (should-error (emaclaude-launch) :type 'user-error)))
 
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here

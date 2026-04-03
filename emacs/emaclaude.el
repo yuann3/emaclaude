@@ -4,6 +4,7 @@
 ;; for multi-agent planning, coding, and review workflows.
 
 (require 'json)
+(require 'map)
 (require 'url)
 (require 'agent-shell)
 
@@ -221,7 +222,11 @@ The resulting buffer is named `emaclaude-buffer-planning'."
                                (or (map-elt config :mode-line-name)
                                    (map-elt config :buffer-name)
                                    "unknown agent")))
-    ;; Spawn the planning buffer via agent-shell
+    ;; Spawn the planning buffer via agent-shell.
+    ;; NOTE: No daemon startup here — this is intentional.  The Rust daemon is
+    ;; being converted to a stateless CLI in Phase 4; HTTP-dependent commands
+    ;; (diff view, PR creation, review submission) will be rewritten in
+    ;; Phases 5-7.  This is NOT a regression but a deliberate migration step.
     (emaclaude--spawn-buffer emaclaude-buffer-planning config)))
 
 ;;;###autoload
