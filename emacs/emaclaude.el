@@ -5,6 +5,7 @@
 
 (require 'json)
 (require 'map)
+(require 'seq)
 (require 'url)
 (require 'agent-shell)
 
@@ -45,7 +46,18 @@
   :type 'string
   :group 'emaclaude)
 
+;;; --- Workflow configuration ---
+
+(defcustom emaclaude-confirmation-loops 2
+  "Number of confirmation review passes before human review."
+  :type 'integer
+  :group 'emaclaude)
+
 ;;; --- Internal state ---
+
+(defvar emaclaude--workflow-state "\"Idle\""
+  "Current workflow state as a JSON string.
+This is the serialized WorkflowState from the Rust state machine.")
 
 (defvar emaclaude--daemon-process nil
   "Process object for the running emaclaude daemon.")
@@ -199,6 +211,7 @@ Does NOT contact the daemon (to avoid circular calls)."
   ;; Clear state
   (setq emaclaude--daemon-process nil)
   (setq emaclaude--selected-agent-config nil)
+  (setq emaclaude--workflow-state "\"Idle\"")
   ;; Restore window configuration
   (when emaclaude--saved-window-config
     (set-window-configuration emaclaude--saved-window-config)
@@ -222,12 +235,101 @@ Uses lsof to find and kill orphaned daemon processes."
 
 ;;; --- Signal handling ---
 
+(defun emaclaude--map-event (event &optional payload)
+  "Map EVENT name and PAYLOAD string to a Rust Event JSON alist.
+EVENT is a kebab-case string from emaclaude-signal.
+PAYLOAD is a JSON string with event-specific data.
+Returns an alist suitable for `json-encode'."
+  (let ((data (and payload (not (string-empty-p payload))
+                   (json-read-from-string payload))))
+    (pcase event
+      ("planning-done"
+       `(("PlanningDone" . ((prompt . ,(alist-get 'prompt data))
+                            (spec_path . ,(alist-get 'spec_path data))))))
+      ("coding-done"
+       `(("CodingDone" . ((branch . ,(or (alist-get 'branch data) "current"))))))
+      ("review-done"
+       (let* ((raw-status (alist-get 'status data))
+              (status (pcase raw-status
+                        ("approved" "Approved")
+                        ("changes_needed" "ChangesNeeded")
+                        (_ raw-status)))
+              (feedback (or (alist-get 'feedback data) "")))
+         `(("ReviewDone" . ((status . ,status)
+                            (feedback . ,feedback))))))
+      ("human-comments"
+       `(("HumanComments" . ((comments . ,(alist-get 'comments data))))))
+      ("create-pr" "CreatePr")
+      ("address-github-reviews"
+       `(("AddressGithubReviews" . ((pr_number . ,(alist-get 'pr_number data))))))
+      ("clear-session" "ClearSession")
+      (_ (error "Unknown event: %s" event)))))
+
+(defun emaclaude--dispatch-effect (effect)
+  "Dispatch a single parameterized EFFECT from the Rust state machine.
+EFFECT is either a string (for simple effects) or an alist (for
+effects with data)."
+  (cond
+   ;; String effects (no data)
+   ((equal effect "SpawnReviewAgent")
+    (emaclaude-spawn-agent emaclaude-buffer-review))
+   ((equal effect "OpenDiffView")
+    (emaclaude--open-diff-view))
+   ((equal effect "RefreshDiffView")
+    (emaclaude--refresh-diff))
+   ((equal effect "Shutdown")
+    (setq emaclaude--workflow-state "\"Idle\"")
+    (emaclaude--cleanup-buffers-and-windows))
+   ;; Object effects (with data)
+   ((assoc "SpawnCodingAgent" effect)
+    (let* ((data (cdr (assoc "SpawnCodingAgent" effect)))
+           (prompt (alist-get 'prompt data)))
+      (emaclaude-spawn-agent emaclaude-buffer-coding)
+      (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
+   ((assoc "SendToCodingAgent" effect)
+    (let ((prompt (alist-get 'prompt (cdr (assoc "SendToCodingAgent" effect)))))
+      (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
+   ((assoc "SendToReviewAgent" effect)
+    (let ((prompt (alist-get 'prompt (cdr (assoc "SendToReviewAgent" effect)))))
+      (emaclaude-send-to-agent emaclaude-buffer-review prompt)))
+   ((assoc "Notify" effect)
+    (let ((message (alist-get 'message (cdr (assoc "Notify" effect)))))
+      (emaclaude--notify message)))
+   (t (emaclaude--notify (format "unknown effect: %S" effect)))))
+
 (defun emaclaude--handle-event (event &optional payload)
   "Handle an agent signal EVENT with optional JSON PAYLOAD string.
 Called by the emaclaude-signal CLI script via emacsclient --eval.
-Full orchestration logic will be added in Phase 5."
+
+Maps the event to the Rust state machine JSON format, pipes it through
+the CLI binary, updates workflow state, and dispatches resulting effects."
   (emaclaude--notify (format "event received: %s (payload: %s)" event (or payload "{}")))
-  t)
+  (condition-case err
+      (let* ((rust-event (emaclaude--map-event event payload))
+             (input `((state . ,(json-read-from-string emaclaude--workflow-state))
+                      (event . ,rust-event)
+                      (config . ((confirmation_loops . ,emaclaude-confirmation-loops)))))
+             (input-json (json-encode input))
+             (cmd (format "echo %s | %s transition"
+                          (shell-quote-argument input-json)
+                          (shell-quote-argument emaclaude-daemon-path)))
+             (output (shell-command-to-string cmd))
+             (result (json-read-from-string output))
+             (new-state (alist-get 'state result))
+             (effects (alist-get 'effects result)))
+        ;; Check for error response from CLI
+        (when (alist-get 'error result)
+          (emaclaude--notify (format "CLI error: %s" (alist-get 'error result)))
+          (cl-return-from emaclaude--handle-event nil))
+        ;; Update workflow state
+        (setq emaclaude--workflow-state (json-encode new-state))
+        ;; Dispatch each effect
+        (seq-doseq (effect effects)
+          (emaclaude--dispatch-effect effect))
+        t)
+    (error
+     (emaclaude--notify (format "handle-event error: %s" (error-message-string err)))
+     nil)))
 
 ;;; --- Public interactive commands ---
 

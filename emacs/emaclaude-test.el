@@ -225,27 +225,168 @@
         (when-let ((b (get-buffer name)))
           (kill-buffer b))))))
 
+;;; --- emaclaude--map-event tests ---
+
+(ert-deftest emaclaude-test-event-mapping-planning-done ()
+  "emaclaude--map-event should map planning-done to PlanningDone JSON."
+  (let ((result (emaclaude--map-event "planning-done" "{\"prompt\":\"build X\",\"spec_path\":\"spec.md\"}")))
+    (should (assoc "PlanningDone" result))
+    (let ((data (cdr (assoc "PlanningDone" result))))
+      (should (equal (alist-get 'prompt data) "build X"))
+      (should (equal (alist-get 'spec_path data) "spec.md")))))
+
+(ert-deftest emaclaude-test-event-mapping-coding-done ()
+  "emaclaude--map-event should map coding-done to CodingDone JSON."
+  (let ((result (emaclaude--map-event "coding-done" "{\"branch\":\"feat\"}")))
+    (should (assoc "CodingDone" result))
+    (should (equal (alist-get 'branch (cdr (assoc "CodingDone" result))) "feat"))))
+
+(ert-deftest emaclaude-test-event-mapping-review-done-approved ()
+  "emaclaude--map-event should convert approved to Approved (PascalCase)."
+  (let ((result (emaclaude--map-event "review-done" "{\"status\":\"approved\"}")))
+    (should (assoc "ReviewDone" result))
+    (let ((data (cdr (assoc "ReviewDone" result))))
+      (should (equal (alist-get 'status data) "Approved"))
+      (should (equal (alist-get 'feedback data) "")))))
+
+(ert-deftest emaclaude-test-event-mapping-review-done-changes-needed ()
+  "emaclaude--map-event should convert changes_needed to ChangesNeeded."
+  (let ((result (emaclaude--map-event "review-done" "{\"status\":\"changes_needed\",\"feedback\":\"fix X\"}")))
+    (let ((data (cdr (assoc "ReviewDone" result))))
+      (should (equal (alist-get 'status data) "ChangesNeeded"))
+      (should (equal (alist-get 'feedback data) "fix X")))))
+
+(ert-deftest emaclaude-test-event-mapping-create-pr ()
+  "emaclaude--map-event should map create-pr to CreatePr string."
+  (should (equal (emaclaude--map-event "create-pr") "CreatePr")))
+
+(ert-deftest emaclaude-test-event-mapping-clear-session ()
+  "emaclaude--map-event should map clear-session to ClearSession string."
+  (should (equal (emaclaude--map-event "clear-session") "ClearSession")))
+
 ;;; --- emaclaude--handle-event tests ---
 
 (ert-deftest emaclaude-test-handle-event-exists ()
   "emaclaude--handle-event should be defined as a function."
   (should (fboundp #'emaclaude--handle-event)))
 
-(ert-deftest emaclaude-test-handle-event-returns-t ()
-  "emaclaude--handle-event should return t."
-  (should (eq t (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\"}"))))
+(ert-deftest emaclaude-test-handle-event-calls-rust-cli ()
+  "emaclaude--handle-event should pipe correct JSON to the Rust CLI."
+  (let ((emaclaude--workflow-state "\"Idle\"")
+        (emaclaude-confirmation-loops 2)
+        (captured-cmd nil))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (cmd)
+                 (setq captured-cmd cmd)
+                 "{\"state\":\"Coding\",\"effects\":[]}")))
+      (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\",\"spec_path\":\"s.md\"}")
+      (should (string-match-p "emaclaude" captured-cmd))
+      (should (string-match-p "transition" captured-cmd)))))
 
-(ert-deftest emaclaude-test-handle-event-no-payload ()
-  "emaclaude--handle-event should accept missing payload without error."
-  (should (eq t (emaclaude--handle-event "coding-done"))))
+(ert-deftest emaclaude-test-handle-event-updates-state ()
+  "emaclaude--handle-event should update emaclaude--workflow-state."
+  (let ((emaclaude--workflow-state "\"Idle\"")
+        (emaclaude-confirmation-loops 2))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_) "{\"state\":\"Coding\",\"effects\":[]}"))
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\",\"spec_path\":\"s.md\"}")
+      (should (equal emaclaude--workflow-state "\"Coding\"")))))
 
-(ert-deftest emaclaude-test-handle-event-notifies ()
-  "emaclaude--handle-event should call emaclaude--notify with event name."
+(ert-deftest emaclaude-test-handle-event-dispatches-effects ()
+  "emaclaude--handle-event should dispatch each effect from CLI output."
+  (let ((emaclaude--workflow-state "\"Idle\"")
+        (emaclaude-confirmation-loops 2)
+        (dispatched-effects nil))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_)
+                 "{\"state\":\"Coding\",\"effects\":[{\"SpawnCodingAgent\":{\"prompt\":\"test\",\"spec_path\":\"s.md\"}},\"SpawnReviewAgent\"]}"))
+              ((symbol-function 'emaclaude--dispatch-effect)
+               (lambda (effect) (push effect dispatched-effects)))
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\",\"spec_path\":\"s.md\"}")
+      (should (= 2 (length dispatched-effects))))))
+
+(ert-deftest emaclaude-test-handle-event-returns-nil-on-error ()
+  "emaclaude--handle-event should return nil when CLI returns error."
+  (let ((emaclaude--workflow-state "\"Idle\"")
+        (emaclaude-confirmation-loops 2))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_) "not valid json {{{"))
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (should (null (emaclaude--handle-event "planning-done" "{\"prompt\":\"t\",\"spec_path\":\"s\"}"))))))
+
+;;; --- emaclaude--dispatch-effect tests ---
+
+(ert-deftest emaclaude-test-dispatch-spawn-coding-agent ()
+  "SpawnCodingAgent should spawn buffer and send prompt."
+  (let ((spawned-name nil)
+        (sent-name nil)
+        (sent-msg nil))
+    (cl-letf (((symbol-function 'emaclaude-spawn-agent)
+               (lambda (name) (setq spawned-name name)))
+              ((symbol-function 'emaclaude-send-to-agent)
+               (lambda (name msg) (setq sent-name name sent-msg msg))))
+      (emaclaude--dispatch-effect '(("SpawnCodingAgent" . ((prompt . "do stuff") (spec_path . "s.md")))))
+      (should (equal spawned-name emaclaude-buffer-coding))
+      (should (equal sent-name emaclaude-buffer-coding))
+      (should (equal sent-msg "do stuff")))))
+
+(ert-deftest emaclaude-test-dispatch-spawn-review-agent ()
+  "SpawnReviewAgent should spawn review buffer."
+  (let ((spawned-name nil))
+    (cl-letf (((symbol-function 'emaclaude-spawn-agent)
+               (lambda (name) (setq spawned-name name))))
+      (emaclaude--dispatch-effect "SpawnReviewAgent")
+      (should (equal spawned-name emaclaude-buffer-review)))))
+
+(ert-deftest emaclaude-test-dispatch-send-to-coding-agent ()
+  "SendToCodingAgent should call emaclaude-send-to-agent."
+  (let ((sent-name nil)
+        (sent-msg nil))
+    (cl-letf (((symbol-function 'emaclaude-send-to-agent)
+               (lambda (name msg) (setq sent-name name sent-msg msg))))
+      (emaclaude--dispatch-effect '(("SendToCodingAgent" . ((prompt . "fix it")))))
+      (should (equal sent-name emaclaude-buffer-coding))
+      (should (equal sent-msg "fix it")))))
+
+(ert-deftest emaclaude-test-dispatch-send-to-review-agent ()
+  "SendToReviewAgent should call emaclaude-send-to-agent."
+  (let ((sent-name nil)
+        (sent-msg nil))
+    (cl-letf (((symbol-function 'emaclaude-send-to-agent)
+               (lambda (name msg) (setq sent-name name sent-msg msg))))
+      (emaclaude--dispatch-effect '(("SendToReviewAgent" . ((prompt . "review it")))))
+      (should (equal sent-name emaclaude-buffer-review))
+      (should (equal sent-msg "review it")))))
+
+(ert-deftest emaclaude-test-dispatch-notify ()
+  "Notify effect should call emaclaude--notify."
   (let ((notified nil))
     (cl-letf (((symbol-function 'emaclaude--notify)
                (lambda (msg) (setq notified msg))))
-      (emaclaude--handle-event "review-done" "{\"status\":\"approved\"}")
-      (should (string-match-p "review-done" notified)))))
+      (emaclaude--dispatch-effect '(("Notify" . ((message . "hello")))))
+      (should (equal notified "hello")))))
+
+(ert-deftest emaclaude-test-dispatch-shutdown ()
+  "Shutdown effect should reset state and call cleanup."
+  (let ((emaclaude--workflow-state "\"Coding\"")
+        (cleanup-called nil))
+    (cl-letf (((symbol-function 'emaclaude--cleanup-buffers-and-windows)
+               (lambda () (setq cleanup-called t))))
+      (emaclaude--dispatch-effect "Shutdown")
+      (should cleanup-called)
+      (should (equal emaclaude--workflow-state "\"Idle\"")))))
+
+;;; --- Workflow state variable tests ---
+
+(ert-deftest emaclaude-test-workflow-state-exists ()
+  "emaclaude--workflow-state should be defined."
+  (should (boundp 'emaclaude--workflow-state)))
+
+(ert-deftest emaclaude-test-confirmation-loops-exists ()
+  "emaclaude-confirmation-loops should be defined."
+  (should (boundp 'emaclaude-confirmation-loops)))
 
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
