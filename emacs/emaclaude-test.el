@@ -316,6 +316,18 @@
               ((symbol-function 'emaclaude--notify) #'ignore))
       (should (null (emaclaude--handle-event "planning-done" "{\"prompt\":\"t\",\"spec_path\":\"s\"}"))))))
 
+(ert-deftest emaclaude-test-handle-event-returns-nil-on-cli-error-json ()
+  "emaclaude--handle-event should return nil when CLI returns JSON error."
+  (let ((emaclaude--workflow-state "\"Idle\"")
+        (emaclaude-confirmation-loops 2)
+        (notified nil))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (_) "{\"error\":\"invalid transition\"}"))
+              ((symbol-function 'emaclaude--notify)
+               (lambda (msg) (setq notified msg))))
+      (should (null (emaclaude--handle-event "coding-done" "{\"branch\":\"x\"}")))
+      (should (string-match-p "invalid transition" notified)))))
+
 ;;; --- emaclaude--dispatch-effect tests ---
 
 (ert-deftest emaclaude-test-dispatch-spawn-coding-agent ()
@@ -327,7 +339,7 @@
                (lambda (name) (setq spawned-name name)))
               ((symbol-function 'emaclaude-send-to-agent)
                (lambda (name msg) (setq sent-name name sent-msg msg))))
-      (emaclaude--dispatch-effect '(("SpawnCodingAgent" . ((prompt . "do stuff") (spec_path . "s.md")))))
+      (emaclaude--dispatch-effect '((SpawnCodingAgent . ((prompt . "do stuff") (spec_path . "s.md")))))
       (should (equal spawned-name emaclaude-buffer-coding))
       (should (equal sent-name emaclaude-buffer-coding))
       (should (equal sent-msg "do stuff")))))
@@ -346,7 +358,7 @@
         (sent-msg nil))
     (cl-letf (((symbol-function 'emaclaude-send-to-agent)
                (lambda (name msg) (setq sent-name name sent-msg msg))))
-      (emaclaude--dispatch-effect '(("SendToCodingAgent" . ((prompt . "fix it")))))
+      (emaclaude--dispatch-effect '((SendToCodingAgent . ((prompt . "fix it")))))
       (should (equal sent-name emaclaude-buffer-coding))
       (should (equal sent-msg "fix it")))))
 
@@ -356,7 +368,7 @@
         (sent-msg nil))
     (cl-letf (((symbol-function 'emaclaude-send-to-agent)
                (lambda (name msg) (setq sent-name name sent-msg msg))))
-      (emaclaude--dispatch-effect '(("SendToReviewAgent" . ((prompt . "review it")))))
+      (emaclaude--dispatch-effect '((SendToReviewAgent . ((prompt . "review it")))))
       (should (equal sent-name emaclaude-buffer-review))
       (should (equal sent-msg "review it")))))
 
@@ -365,7 +377,7 @@
   (let ((notified nil))
     (cl-letf (((symbol-function 'emaclaude--notify)
                (lambda (msg) (setq notified msg))))
-      (emaclaude--dispatch-effect '(("Notify" . ((message . "hello")))))
+      (emaclaude--dispatch-effect '((Notify . ((message . "hello")))))
       (should (equal notified "hello")))))
 
 (ert-deftest emaclaude-test-dispatch-shutdown ()

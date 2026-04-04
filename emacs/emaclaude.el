@@ -280,20 +280,21 @@ effects with data)."
    ((equal effect "Shutdown")
     (setq emaclaude--workflow-state "\"Idle\"")
     (emaclaude--cleanup-buffers-and-windows))
-   ;; Object effects (with data)
-   ((assoc "SpawnCodingAgent" effect)
-    (let* ((data (cdr (assoc "SpawnCodingAgent" effect)))
-           (prompt (alist-get 'prompt data)))
+   ;; Object effects (with data) — json-read-from-string produces symbol keys
+   ((assoc 'SpawnCodingAgent effect)
+    (let* ((data (cdr (assoc 'SpawnCodingAgent effect)))
+           (prompt (alist-get 'prompt data))
+           (spec-path (alist-get 'spec_path data)))
       (emaclaude-spawn-agent emaclaude-buffer-coding)
       (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
-   ((assoc "SendToCodingAgent" effect)
-    (let ((prompt (alist-get 'prompt (cdr (assoc "SendToCodingAgent" effect)))))
+   ((assoc 'SendToCodingAgent effect)
+    (let ((prompt (alist-get 'prompt (cdr (assoc 'SendToCodingAgent effect)))))
       (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
-   ((assoc "SendToReviewAgent" effect)
-    (let ((prompt (alist-get 'prompt (cdr (assoc "SendToReviewAgent" effect)))))
+   ((assoc 'SendToReviewAgent effect)
+    (let ((prompt (alist-get 'prompt (cdr (assoc 'SendToReviewAgent effect)))))
       (emaclaude-send-to-agent emaclaude-buffer-review prompt)))
-   ((assoc "Notify" effect)
-    (let ((message (alist-get 'message (cdr (assoc "Notify" effect)))))
+   ((assoc 'Notify effect)
+    (let ((message (alist-get 'message (cdr (assoc 'Notify effect)))))
       (emaclaude--notify message)))
    (t (emaclaude--notify (format "unknown effect: %S" effect)))))
 
@@ -318,15 +319,16 @@ the CLI binary, updates workflow state, and dispatches resulting effects."
              (new-state (alist-get 'state result))
              (effects (alist-get 'effects result)))
         ;; Check for error response from CLI
-        (when (alist-get 'error result)
-          (emaclaude--notify (format "CLI error: %s" (alist-get 'error result)))
-          (cl-return-from emaclaude--handle-event nil))
-        ;; Update workflow state
-        (setq emaclaude--workflow-state (json-encode new-state))
-        ;; Dispatch each effect
-        (seq-doseq (effect effects)
-          (emaclaude--dispatch-effect effect))
-        t)
+        (if (alist-get 'error result)
+            (progn
+              (emaclaude--notify (format "CLI error: %s" (alist-get 'error result)))
+              nil)
+          ;; Update workflow state
+          (setq emaclaude--workflow-state (json-encode new-state))
+          ;; Dispatch each effect
+          (seq-doseq (effect effects)
+            (emaclaude--dispatch-effect effect))
+          t))
     (error
      (emaclaude--notify (format "handle-event error: %s" (error-message-string err)))
      nil)))
