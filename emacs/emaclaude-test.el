@@ -400,5 +400,60 @@
   "emaclaude-confirmation-loops should be defined."
   (should (boundp 'emaclaude-confirmation-loops)))
 
+;;; --- Diff base tests ---
+
+(ert-deftest emaclaude-test-diff-base-returns-main ()
+  "emaclaude--diff-base should always return \"main\"."
+  (should (equal (emaclaude--diff-base) "main")))
+
+;;; --- Submit comments tests ---
+
+(ert-deftest emaclaude-test-submit-comments-calls-handle-event ()
+  "emaclaude-submit-comments should call emaclaude--handle-event with human-comments."
+  (let ((captured-event nil)
+        (captured-payload nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event)
+               (lambda (event payload)
+                 (setq captured-event event
+                       captured-payload payload)))
+              ((symbol-function 'emaclaude--remove-comment-overlays) #'ignore)
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (with-temp-buffer
+        (setq-local emaclaude--review-comments
+                    '(((file . "src/main.rs") (line . 10) (end_line . 10) (text . "fix this"))))
+        (emaclaude-submit-comments)
+        (should (equal captured-event "human-comments"))
+        (let* ((parsed (json-read-from-string captured-payload))
+               (comments (alist-get 'comments parsed)))
+          (should (= 1 (length comments)))
+          (should (equal (alist-get 'file (aref comments 0)) "src/main.rs"))
+          (should (equal (alist-get 'text (aref comments 0)) "fix this")))
+        (should (null emaclaude--review-comments))))))
+
+(ert-deftest emaclaude-test-submit-comments-no-comments ()
+  "emaclaude-submit-comments should notify when no comments exist."
+  (let ((notified nil))
+    (cl-letf (((symbol-function 'emaclaude--notify)
+               (lambda (msg) (setq notified msg))))
+      (with-temp-buffer
+        (setq-local emaclaude--review-comments nil)
+        (emaclaude-submit-comments)
+        (should (string-match-p "no comments" notified))))))
+
+;;; --- Create PR tests ---
+
+(ert-deftest emaclaude-test-create-pr-calls-handle-event ()
+  "emaclaude-create-pr should call emaclaude--handle-event with create-pr."
+  (let ((captured-event nil)
+        (captured-payload nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event)
+               (lambda (event payload)
+                 (setq captured-event event
+                       captured-payload payload)))
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude-create-pr)
+      (should (equal captured-event "create-pr"))
+      (should (equal captured-payload "{}")))))
+
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here

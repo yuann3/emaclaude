@@ -146,24 +146,20 @@ Returns nil if the buffer does not exist."
       t)))
 
 (defun emaclaude--diff-base ()
-  "Determine the base ref for the diff view.
-If the current branch has an upstream, diff against it to show unpushed
-commits plus working tree changes. Otherwise fall back to HEAD."
-  (or (magit-get-upstream-ref)
-      "HEAD"))
+  "Return the base ref for the diff view.
+Always diffs against main so the review shows all feature-branch changes."
+  "main")
 
 (defun emaclaude--open-diff-view ()
-  "Open a magit diff showing all local changes vs remote.
-Includes unpushed commits, staged changes, and unstaged changes.
+  "Open a magit diff comparing current branch against main.
+Sets `default-directory' from the git toplevel for worktree support.
 Expands all file sections so changes are visible per-file."
   (require 'magit)
-  (let ((win (car (last (window-list))))
-        (base (emaclaude--diff-base)))
+  (let* ((win (car (last (window-list))))
+         (base (emaclaude--diff-base))
+         (default-directory (or (magit-toplevel) default-directory)))
     (select-window win)
     (magit-diff-range (format "%s..HEAD" base))
-    ;; If there are also uncommitted changes, show a combined view
-    ;; by using the working tree diff against the upstream
-    (magit-diff-working-tree base)
     (rename-buffer emaclaude-buffer-diff t)
     ;; Expand all file sections so diffs are visible
     (magit-section-show-level-4-all)
@@ -448,26 +444,23 @@ Works with evil visual line mode (Shift-V): select lines, then SPC m c."
                                (length emaclaude--review-comments)))))
 
 (defun emaclaude-submit-comments ()
-  "POST all review comments to the daemon /human-review endpoint."
+  "Submit all review comments via the state machine."
   (interactive)
   (if (null emaclaude--review-comments)
       (emaclaude--notify "no comments to submit")
-    (emaclaude--post "/human-review"
-                     `((comments . ,(vconcat emaclaude--review-comments)))
-                     (lambda (_status)
-                       (emaclaude--notify
-                        (format "submitted %d comment(s)"
-                                (length emaclaude--review-comments)))
-                       (kill-buffer (current-buffer))))
-    (setq emaclaude--review-comments nil)))
+    (let* ((comments (vconcat emaclaude--review-comments))
+           (payload (json-encode `((comments . ,comments))))
+           (count (length emaclaude--review-comments)))
+      (emaclaude--handle-event "human-comments" payload)
+      (setq emaclaude--review-comments nil)
+      (emaclaude--remove-comment-overlays)
+      (emaclaude--notify (format "submitted %d comment(s)" count)))))
 
 (defun emaclaude-create-pr ()
-  "POST to the daemon /create-pr endpoint to create a pull request."
+  "Request PR creation via the state machine."
   (interactive)
-  (emaclaude--post "/create-pr" nil
-                   (lambda (_status)
-                     (emaclaude--notify "PR creation requested")
-                     (kill-buffer (current-buffer)))))
+  (emaclaude--handle-event "create-pr" "{}")
+  (emaclaude--notify "PR creation requested"))
 
 (defun emaclaude-close-diff ()
   "Remove comment overlays and kill the diff buffer."
