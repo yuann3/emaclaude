@@ -2,4 +2,4 @@
 ;;; tools/emaclaude/packages.el
 (package! agent-shell)
 (package! magit)
-(package! emaclaude :recipe (:host github :repo "yuann3/emaclaude" :files ("emacs/*.el")))
+(package! emaclaude :recipe (:local-repo "/Users/yuan/Developer/emaclaude" :files ("emacs/*.el")))
