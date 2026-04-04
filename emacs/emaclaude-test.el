@@ -479,5 +479,146 @@
     (should (assoc "AddressGithubReviews" result))
     (should (equal (alist-get 'pr_number (cdr (assoc "AddressGithubReviews" result))) 99))))
 
+;;; --- Logging tests ---
+
+(ert-deftest emaclaude-test-log-event-writes-jsonl ()
+  "emaclaude--log-event should write valid JSON to the correct file path."
+  (let* ((tmp-dir (make-temp-file "emaclaude-log-test" t))
+         (log-dir (expand-file-name "logs" tmp-dir))
+         (expected-file (expand-file-name
+                         (format "%s.jsonl" (format-time-string "%Y-%m-%d"))
+                         log-dir)))
+    (cl-letf (((symbol-function 'expand-file-name)
+               (let ((orig (symbol-function 'expand-file-name)))
+                 (lambda (name &optional dir)
+                   (if (and (stringp dir) (string= dir "~/.emaclaude"))
+                       (funcall orig name tmp-dir)
+                     (funcall orig name dir))))))
+      (unwind-protect
+          (progn
+            (emaclaude--log-event "test-event" "StateA" "StateB" "test payload")
+            (should (file-exists-p expected-file))
+            (let* ((content (with-temp-buffer
+                              (insert-file-contents expected-file)
+                              (buffer-string)))
+                   (parsed (json-read-from-string (string-trim content))))
+              (should (equal (alist-get 'event parsed) "test-event"))
+              (should (equal (alist-get 'from parsed) "StateA"))
+              (should (equal (alist-get 'to parsed) "StateB"))
+              (should (equal (alist-get 'payload parsed) "test payload"))
+              (should (alist-get 'timestamp parsed))))
+        (delete-directory tmp-dir t)))))
+
+(ert-deftest emaclaude-test-log-event-omits-nil-fields ()
+  "emaclaude--log-event should omit from/to/payload when nil."
+  (let* ((tmp-dir (make-temp-file "emaclaude-log-test" t))
+         (log-dir (expand-file-name "logs" tmp-dir))
+         (expected-file (expand-file-name
+                         (format "%s.jsonl" (format-time-string "%Y-%m-%d"))
+                         log-dir)))
+    (cl-letf (((symbol-function 'expand-file-name)
+               (let ((orig (symbol-function 'expand-file-name)))
+                 (lambda (name &optional dir)
+                   (if (and (stringp dir) (string= dir "~/.emaclaude"))
+                       (funcall orig name tmp-dir)
+                     (funcall orig name dir))))))
+      (unwind-protect
+          (progn
+            (emaclaude--log-event "minimal-event")
+            (let* ((content (with-temp-buffer
+                              (insert-file-contents expected-file)
+                              (buffer-string)))
+                   (parsed (json-read-from-string (string-trim content))))
+              (should (equal (alist-get 'event parsed) "minimal-event"))
+              (should-not (assoc 'from parsed))
+              (should-not (assoc 'to parsed))
+              (should-not (assoc 'payload parsed))))
+        (delete-directory tmp-dir t)))))
+
+;;; --- Watchdog tests ---
+
+(ert-deftest emaclaude-test-reset-watchdog-creates-timer ()
+  "emaclaude--reset-watchdog should create a timer."
+  (let ((emaclaude--watchdog-timer nil)
+        (emaclaude-watchdog-timeout 9999))
+    (unwind-protect
+        (progn
+          (emaclaude--reset-watchdog)
+          (should (timerp emaclaude--watchdog-timer)))
+      (emaclaude--cancel-watchdog))))
+
+(ert-deftest emaclaude-test-cancel-watchdog-clears-timer ()
+  "emaclaude--cancel-watchdog should cancel and nil the timer."
+  (let ((emaclaude--watchdog-timer nil)
+        (emaclaude-watchdog-timeout 9999))
+    (emaclaude--reset-watchdog)
+    (should (timerp emaclaude--watchdog-timer))
+    (emaclaude--cancel-watchdog)
+    (should (null emaclaude--watchdog-timer))))
+
+(ert-deftest emaclaude-test-cancel-watchdog-noop-when-nil ()
+  "emaclaude--cancel-watchdog should not error when timer is nil."
+  (let ((emaclaude--watchdog-timer nil))
+    (should-not (emaclaude--cancel-watchdog))))
+
+;;; --- Clear session tests ---
+
+(ert-deftest emaclaude-test-clear-session-cancels-watchdog ()
+  "emaclaude-clear-session should cancel the watchdog timer."
+  (let ((emaclaude--watchdog-timer nil)
+        (emaclaude-watchdog-timeout 9999)
+        (emaclaude--workflow-state "\"Idle\"")
+        (emaclaude--selected-agent-config nil)
+        (emaclaude--saved-window-config nil))
+    (emaclaude--reset-watchdog)
+    (should (timerp emaclaude--watchdog-timer))
+    (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude-clear-session))
+    (should (null emaclaude--watchdog-timer))))
+
+(ert-deftest emaclaude-test-clear-session-resets-state ()
+  "emaclaude-clear-session should reset workflow state to Idle."
+  (let ((emaclaude--workflow-state "\"Coding\"")
+        (emaclaude--watchdog-timer nil)
+        (emaclaude--selected-agent-config '((:model . "test")))
+        (emaclaude--saved-window-config nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude-clear-session))
+    (should (equal emaclaude--workflow-state "\"Idle\""))
+    (should (null emaclaude--selected-agent-config))))
+
+(ert-deftest emaclaude-test-clear-session-is-interactive ()
+  "emaclaude-clear-session should be an interactive command."
+  (should (commandp #'emaclaude-clear-session)))
+
+(ert-deftest emaclaude-test-clear-session-no-daemon-references ()
+  "emaclaude-clear-session source should not reference daemon or HTTP."
+  (let ((source (with-temp-buffer
+                  (insert-file-contents
+                   (expand-file-name "emaclaude.el"
+                                     (file-name-directory
+                                      (or load-file-name
+                                          buffer-file-name
+                                          default-directory))))
+                  ;; Extract the clear-session defun
+                  (goto-char (point-min))
+                  (when (re-search-forward "(defun emaclaude-clear-session" nil t)
+                    (beginning-of-line)
+                    (let ((start (point)))
+                      (forward-sexp)
+                      (buffer-substring-no-properties start (point)))))))
+    (should source)
+    (should-not (string-match-p "emaclaude--post" source))
+    (should-not (string-match-p "emaclaude--daemon-process" source))
+    (should-not (string-match-p "emaclaude--kill-stale" source))))
+
+;;; --- Watchdog timeout variable ---
+
+(ert-deftest emaclaude-test-watchdog-timeout-default ()
+  "emaclaude-watchdog-timeout should default to 600."
+  (should (= emaclaude-watchdog-timeout 600)))
+
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
