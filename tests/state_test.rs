@@ -40,8 +40,9 @@ fn coding_to_reviewing_on_coding_done() {
     match &t.effects[0] {
         SideEffect::SendToReviewAgent { prompt } => {
             assert!(prompt.contains("feature-x"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
-            assert!(prompt.contains("/review-done"));
+            assert!(prompt.contains("emaclaude-signal review-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToReviewAgent, got {:?}", other),
     }
@@ -62,8 +63,9 @@ fn reviewing_to_coding_on_changes_needed() {
     match &t.effects[0] {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("fix the error handling"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
-            assert!(prompt.contains("/coding-done"));
+            assert!(prompt.contains("emaclaude-signal coding-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToCodingAgent, got {:?}", other),
     }
@@ -84,7 +86,9 @@ fn reviewing_to_confirming_on_approved() {
     match &t.effects[0] {
         SideEffect::SendToReviewAgent { prompt } => {
             assert!(prompt.contains("Re-review"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
+            assert!(prompt.contains("emaclaude-signal review-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToReviewAgent, got {:?}", other),
     }
@@ -106,6 +110,9 @@ fn confirming_increments_on_approved() {
     match &t.effects[0] {
         SideEffect::SendToReviewAgent { prompt } => {
             assert!(prompt.contains("Re-review"));
+            assert!(prompt.contains("emaclaude-signal review-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToReviewAgent, got {:?}", other),
     }
@@ -148,7 +155,9 @@ fn confirming_resets_on_changes_needed() {
     match &t.effects[0] {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("actually found a bug"));
-            assert!(prompt.contains("/coding-done"));
+            assert!(prompt.contains("emaclaude-signal coding-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToCodingAgent, got {:?}", other),
     }
@@ -176,7 +185,9 @@ fn human_review_sends_comments_to_coding_agent() {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("src/main.rs:42: rename this variable"));
             assert!(prompt.contains("src/lib.rs:10: add docs"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
+            assert!(prompt.contains("emaclaude-signal coding-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToCodingAgent, got {:?}", other),
     }
@@ -191,7 +202,9 @@ fn human_review_to_pr_created() {
     match &t.effects[0] {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("pull request"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
+            assert!(prompt.contains("emaclaude-signal pr-created"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToCodingAgent, got {:?}", other),
     }
@@ -210,7 +223,9 @@ fn pr_created_addresses_github_reviews() {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("42"));
             assert!(prompt.contains("gh api"));
-            assert!(prompt.contains(&format!("localhost:{}", config.port)));
+            assert!(prompt.contains("emaclaude-signal coding-done"));
+            assert!(!prompt.contains("curl"));
+            assert!(!prompt.contains("localhost"));
         }
         other => panic!("Expected SendToCodingAgent, got {:?}", other),
     }
@@ -279,4 +294,187 @@ fn unhandled_transition_returns_same_state() {
     );
     assert_eq!(t.state, WorkflowState::Idle);
     assert!(t.effects.is_empty());
+}
+
+// --- New tests for JSON contract ---
+
+#[test]
+fn json_round_trip_transition_input() {
+    let input_json = r#"{
+        "state": "Idle",
+        "event": {
+            "PlanningDone": {
+                "prompt": "implement feature X",
+                "spec_path": "specs/feature-x.md"
+            }
+        },
+        "config": {
+            "confirmation_loops": 2
+        }
+    }"#;
+
+    #[derive(serde::Deserialize)]
+    struct TransitionInput {
+        state: WorkflowState,
+        event: Event,
+        config: WorkflowConfig,
+    }
+
+    let parsed: TransitionInput = serde_json::from_str(input_json).unwrap();
+    assert_eq!(parsed.state, WorkflowState::Idle);
+    assert_eq!(parsed.config.confirmation_loops, 2);
+
+    let t = parsed.state.next(parsed.event, &parsed.config);
+    assert_eq!(t.state, WorkflowState::Coding);
+
+    // Serialize the output
+    let output_json = serde_json::to_value(&t).unwrap();
+    assert_eq!(output_json["state"], "Coding");
+    assert!(output_json["effects"].is_array());
+    assert_eq!(output_json["effects"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn json_round_trip_confirming_state() {
+    let state = WorkflowState::Confirming { approval_count: 3 };
+    let json = serde_json::to_value(&state).unwrap();
+    assert_eq!(json, serde_json::json!({"Confirming": {"approval_count": 3}}));
+    let deserialized: WorkflowState = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, state);
+}
+
+#[test]
+fn json_round_trip_simple_states() {
+    for (state, expected_json) in [
+        (WorkflowState::Idle, "\"Idle\""),
+        (WorkflowState::Coding, "\"Coding\""),
+        (WorkflowState::Reviewing, "\"Reviewing\""),
+        (WorkflowState::HumanReview, "\"HumanReview\""),
+        (WorkflowState::PrCreated, "\"PrCreated\""),
+    ] {
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(json, expected_json);
+        let deserialized: WorkflowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, state);
+    }
+}
+
+#[test]
+fn json_side_effect_with_data() {
+    let effect = SideEffect::SpawnCodingAgent {
+        prompt: "do stuff".into(),
+        spec_path: "spec.md".into(),
+    };
+    let json = serde_json::to_value(&effect).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"SpawnCodingAgent": {"prompt": "do stuff", "spec_path": "spec.md"}})
+    );
+}
+
+#[test]
+fn json_side_effect_without_data() {
+    let effect = SideEffect::SpawnReviewAgent;
+    let json = serde_json::to_string(&effect).unwrap();
+    assert_eq!(json, "\"SpawnReviewAgent\"");
+}
+
+#[test]
+fn json_event_clear_session() {
+    let event: Event = serde_json::from_str("\"ClearSession\"").unwrap();
+    assert_eq!(event, Event::ClearSession);
+}
+
+#[test]
+fn json_event_with_data() {
+    let json = r#"{"ReviewDone": {"status": "Approved", "feedback": "lgtm"}}"#;
+    let event: Event = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        event,
+        Event::ReviewDone {
+            status: ReviewStatus::Approved,
+            feedback: "lgtm".into(),
+        }
+    );
+}
+
+#[test]
+fn no_curl_or_localhost_in_any_prompt() {
+    let config = default_config();
+    // Collect all transitions that produce prompt text
+    let transitions = vec![
+        WorkflowState::Coding.next(
+            Event::CodingDone { branch: "b".into() },
+            &config,
+        ),
+        WorkflowState::Reviewing.next(
+            Event::ReviewDone {
+                status: ReviewStatus::ChangesNeeded,
+                feedback: "f".into(),
+            },
+            &config,
+        ),
+        WorkflowState::Reviewing.next(
+            Event::ReviewDone {
+                status: ReviewStatus::Approved,
+                feedback: "".into(),
+            },
+            &config,
+        ),
+        WorkflowState::Confirming { approval_count: 1 }.next(
+            Event::ReviewDone {
+                status: ReviewStatus::Approved,
+                feedback: "".into(),
+            },
+            &config,
+        ),
+        WorkflowState::Confirming { approval_count: 1 }.next(
+            Event::ReviewDone {
+                status: ReviewStatus::ChangesNeeded,
+                feedback: "f".into(),
+            },
+            &config,
+        ),
+        WorkflowState::HumanReview.next(
+            Event::HumanComments {
+                comments: vec![Comment {
+                    file: "f".into(),
+                    line: 1,
+                    text: "t".into(),
+                }],
+            },
+            &config,
+        ),
+        WorkflowState::HumanReview.next(Event::CreatePr, &config),
+        WorkflowState::PrCreated.next(
+            Event::AddressGithubReviews { pr_number: 1 },
+            &config,
+        ),
+    ];
+
+    for t in &transitions {
+        for effect in &t.effects {
+            match effect {
+                SideEffect::SendToCodingAgent { prompt }
+                | SideEffect::SendToReviewAgent { prompt } => {
+                    assert!(
+                        !prompt.contains("curl"),
+                        "Found 'curl' in prompt: {}",
+                        prompt
+                    );
+                    assert!(
+                        !prompt.contains("localhost"),
+                        "Found 'localhost' in prompt: {}",
+                        prompt
+                    );
+                    assert!(
+                        prompt.contains("emaclaude-signal"),
+                        "Missing 'emaclaude-signal' in prompt: {}",
+                        prompt
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
 }

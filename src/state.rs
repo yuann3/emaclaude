@@ -23,7 +23,7 @@ pub struct Comment {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     PlanningDone { prompt: String, spec_path: String },
     CodingDone { branch: String },
@@ -34,7 +34,7 @@ pub enum Event {
     ClearSession,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SideEffect {
     SpawnCodingAgent { prompt: String, spec_path: String },
     SpawnReviewAgent,
@@ -46,23 +46,21 @@ pub enum SideEffect {
     Shutdown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub state: WorkflowState,
     pub effects: Vec<SideEffect>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     pub confirmation_loops: u32,
-    pub port: u16,
 }
 
 impl Default for WorkflowConfig {
     fn default() -> Self {
         Self {
             confirmation_loops: 2,
-            port: 7878,
         }
     }
 }
@@ -106,9 +104,9 @@ impl WorkflowState {
                          3. Redundant code — no duplication, dead code, or unnecessary complexity\n\
                          4. Spec adherence — does the implementation match the spec?\n\n\
                          When done, report results via:\n\
-                         curl -s -X POST http://localhost:{}/review-done -H 'Content-Type: application/json' \
-                         -d '{{\"status\": \"approved\"}}' or -d '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
-                        branch, config.port
+                         emaclaude-signal review-done '{{\"status\": \"approved\"}}' or \
+                         '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
+                        branch
                     ),
                 }],
             },
@@ -125,9 +123,8 @@ impl WorkflowState {
                 effects: vec![SideEffect::SendToCodingAgent {
                     prompt: format!(
                         "Address the following review feedback:\n{}\n\nWhen done, report via: \
-                         curl -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
-                         -d '{{\"branch\": \"current\"}}'",
-                        feedback, config.port
+                         emaclaude-signal coding-done '{{\"branch\": \"current\"}}'",
+                        feedback
                     ),
                 }],
             },
@@ -142,12 +139,9 @@ impl WorkflowState {
             ) => Transition {
                 state: WorkflowState::Confirming { approval_count: 1 },
                 effects: vec![SideEffect::SendToReviewAgent {
-                    prompt: format!(
-                        "Re-review the changes for confirmation. When done, report via: \
-                         curl -X POST http://localhost:{}/review-done -H 'Content-Type: application/json' \
-                         -d '{{\"status\": \"approved\"}}' or -d '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
-                        config.port
-                    ),
+                    prompt: "Re-review the changes for confirmation. When done, report via: \
+                         emaclaude-signal review-done '{\"status\": \"approved\"}' or \
+                         '{\"status\": \"changes_needed\", \"feedback\": \"...\"}'".to_string(),
                 }],
             },
 
@@ -172,10 +166,9 @@ impl WorkflowState {
                     effects: vec![SideEffect::SendToReviewAgent {
                         prompt: format!(
                             "Re-review the changes for confirmation (round {}). When done, report via: \
-                             curl -X POST http://localhost:{}/review-done -H 'Content-Type: application/json' \
-                             -d '{{\"status\": \"approved\"}}' or -d '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
-                            approval_count + 1,
-                            config.port
+                             emaclaude-signal review-done '{{\"status\": \"approved\"}}' or \
+                             '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'",
+                            approval_count + 1
                         ),
                     }],
                 },
@@ -184,9 +177,8 @@ impl WorkflowState {
                     effects: vec![SideEffect::SendToCodingAgent {
                         prompt: format!(
                             "Address the following review feedback:\n{}\n\nWhen done, report via: \
-                             curl -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
-                             -d '{{\"branch\": \"current\"}}'",
-                            feedback, config.port
+                             emaclaude-signal coding-done '{{\"branch\": \"current\"}}'",
+                            feedback
                         ),
                     }],
                 },
@@ -204,9 +196,8 @@ impl WorkflowState {
                     effects: vec![SideEffect::SendToCodingAgent {
                         prompt: format!(
                             "Address the following human review comments:\n{}\n\nWhen done, report via: \
-                             curl -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
-                             -d '{{\"branch\": \"current\"}}'",
-                            formatted, config.port
+                             emaclaude-signal coding-done '{{\"branch\": \"current\"}}'",
+                            formatted
                         ),
                     }],
                 }
@@ -216,12 +207,9 @@ impl WorkflowState {
             (WorkflowState::HumanReview, Event::CreatePr) => Transition {
                 state: WorkflowState::PrCreated,
                 effects: vec![SideEffect::SendToCodingAgent {
-                    prompt: format!(
-                        "Create a pull request for the current branch. Use gh CLI to create the PR. \
-                         When done, report via: curl -X POST http://localhost:{}/pr-created \
-                         -H 'Content-Type: application/json' -d '{{\"pr_number\": <number>}}'",
-                        config.port
-                    ),
+                    prompt: "Create a pull request for the current branch. Use gh CLI to create the PR. \
+                         When done, report via: emaclaude-signal pr-created '{\"pr_number\": <number>}'"
+                        .to_string(),
                 }],
             },
 
@@ -235,9 +223,8 @@ impl WorkflowState {
                          and resolve the conversation. Push all fixes. \
                          Do NOT re-request review.\n\n\
                          When done, report via:\n\
-                         curl -s -X POST http://localhost:{}/coding-done -H 'Content-Type: application/json' \
-                         -d '{{\"branch\": \"current\"}}'",
-                        pr_number, config.port
+                         emaclaude-signal coding-done '{{\"branch\": \"current\"}}'",
+                        pr_number
                     ),
                 }],
             },

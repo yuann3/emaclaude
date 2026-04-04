@@ -1,10 +1,10 @@
-use anyhow::Result;
 use clap::{Parser, Subcommand};
-use emaclaude::config::Config;
-use emaclaude::server;
+use emaclaude::state::{Event, Transition, WorkflowConfig, WorkflowState};
+use std::io::Read;
+use std::process;
 
 #[derive(Parser)]
-#[command(name = "emaclaude", about = "Claude Code + Doom Emacs orchestration daemon")]
+#[command(name = "emaclaude", about = "Claude Code + Doom Emacs orchestration CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -12,46 +12,77 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the emaclaude daemon
-    Serve {
-        /// Port to listen on (overrides config)
-        #[arg(short, long)]
-        port: Option<u16>,
-    },
+    /// Process a state transition: reads JSON from stdin, writes result to stdout
+    Transition,
     /// Set up symlinks for skills and Emacs module
     Setup,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+#[derive(serde::Deserialize)]
+struct TransitionInput {
+    state: WorkflowState,
+    event: Event,
+    config: WorkflowConfig,
+}
 
+#[derive(serde::Serialize)]
+struct TransitionOutput {
+    state: WorkflowState,
+    effects: Vec<emaclaude::state::SideEffect>,
+}
+
+#[derive(serde::Serialize)]
+struct ErrorOutput {
+    error: String,
+}
+
+fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve { port } => {
-            let mut config = Config::load()?;
-            if let Some(p) = port {
-                config.port = p;
-            }
-            tracing::info!(port = config.port, "starting emaclaude daemon");
-            server::run(config).await?;
+        Commands::Transition => {
+            run_transition();
         }
         Commands::Setup => {
-            setup()?;
+            if let Err(e) = setup() {
+                eprintln!("setup failed: {}", e);
+                process::exit(1);
+            }
         }
     }
-
-    Ok(())
 }
 
-fn setup() -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
+fn run_transition() {
+    let mut input = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut input) {
+        let err = ErrorOutput {
+            error: format!("failed to read stdin: {}", e),
+        };
+        println!("{}", serde_json::to_string(&err).unwrap());
+        process::exit(1);
+    }
+
+    let parsed: TransitionInput = match serde_json::from_str(&input) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = ErrorOutput {
+                error: format!("invalid input JSON: {}", e),
+            };
+            println!("{}", serde_json::to_string(&err).unwrap());
+            process::exit(1);
+        }
+    };
+
+    let Transition { state, effects } = parsed.state.next(parsed.event, &parsed.config);
+
+    let output = TransitionOutput { state, effects };
+    println!("{}", serde_json::to_string(&output).unwrap());
+}
+
+fn setup() -> Result<(), Box<dyn std::error::Error>> {
+    let home = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "could not determine home directory")?;
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // Symlink each skill directory individually into ~/.claude/skills/
@@ -64,7 +95,7 @@ fn setup() -> Result<()> {
         if entry.file_type()?.is_dir() {
             let name = entry.file_name();
             let dst = skills_parent.join(&name);
-            symlink_dir(&entry.path(), &dst)?;
+            symlink_path(&entry.path(), &dst)?;
         }
     }
 
@@ -73,39 +104,26 @@ fn setup() -> Result<()> {
     let local_bin = home.join(".local").join("bin");
     std::fs::create_dir_all(&local_bin)?;
     let signal_dst = local_bin.join("emaclaude-signal");
-    symlink_file(&signal_src, &signal_dst)?;
+    symlink_path(&signal_src, &signal_dst)?;
 
     // Symlink Doom module
     let emacs_src = manifest_dir.join("emacs");
     let emacs_dst = home.join(".doom.d").join("modules").join("tools").join("emaclaude");
-    symlink_dir(&emacs_src, &emacs_dst)?;
+    symlink_path(&emacs_src, &emacs_dst)?;
 
-    tracing::info!("setup complete");
+    eprintln!("setup complete");
     Ok(())
 }
 
-fn symlink_file(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+fn symlink_path(src: &std::path::Path, dst: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
     if dst.exists() || dst.symlink_metadata().is_ok() {
-        tracing::warn!(dst = %dst.display(), "destination already exists, skipping");
+        eprintln!("destination already exists, skipping: {}", dst.display());
         return Ok(());
     }
     std::os::unix::fs::symlink(src, dst)?;
-    tracing::info!(src = %src.display(), dst = %dst.display(), "symlinked");
-    Ok(())
-}
-
-fn symlink_dir(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    if let Some(parent) = dst.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    if dst.exists() || dst.symlink_metadata().is_ok() {
-        tracing::warn!(dst = %dst.display(), "destination already exists, skipping");
-        return Ok(());
-    }
-    std::os::unix::fs::symlink(src, dst)?;
-    tracing::info!(src = %src.display(), dst = %dst.display(), "symlinked");
+    eprintln!("symlinked: {} -> {}", src.display(), dst.display());
     Ok(())
 }
