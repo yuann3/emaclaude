@@ -24,15 +24,17 @@
 
 ;;; --- packages.el declaration tests ---
 
+(defvar emaclaude-test--emacs-dir
+  (file-name-directory (symbol-file 'emaclaude-launch 'defun))
+  "Directory containing the emaclaude elisp files.
+Derived from the loaded emaclaude.el, so it works regardless of CWD.")
+
 (ert-deftest emaclaude-test-packages-declares-agent-shell ()
   "packages.el should declare agent-shell as a dependency."
   (let ((packages-content (with-temp-buffer
                             (insert-file-contents
                              (expand-file-name "packages.el"
-                                               (file-name-directory
-                                                (or load-file-name
-                                                    buffer-file-name
-                                                    default-directory))))
+                                               emaclaude-test--emacs-dir))
                             (buffer-string))))
     (should (string-match-p "agent-shell" packages-content))))
 
@@ -41,10 +43,7 @@
   (let ((packages-content (with-temp-buffer
                             (insert-file-contents
                              (expand-file-name "packages.el"
-                                               (file-name-directory
-                                                (or load-file-name
-                                                    buffer-file-name
-                                                    default-directory))))
+                                               emaclaude-test--emacs-dir))
                             (buffer-string))))
     (should-not (string-match-p "vterm" packages-content))))
 
@@ -598,10 +597,7 @@
   (let ((source (with-temp-buffer
                   (insert-file-contents
                    (expand-file-name "emaclaude.el"
-                                     (file-name-directory
-                                      (or load-file-name
-                                          buffer-file-name
-                                          default-directory))))
+                                     emaclaude-test--emacs-dir))
                   ;; Extract the clear-session defun
                   (goto-char (point-min))
                   (when (re-search-forward "(defun emaclaude-clear-session" nil t)

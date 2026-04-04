@@ -11,12 +11,12 @@
 ;;; --- Customization group ---
 
 (defgroup emaclaude nil
-  "Emacs interface for the emaclaude daemon."
+  "Emacs interface for the emaclaude CLI orchestrator."
   :group 'tools
   :prefix "emaclaude-")
 
 (defcustom emaclaude-daemon-path "emaclaude"
-  "Path to the emaclaude daemon binary."
+  "Path to the emaclaude CLI binary."
   :type 'string
   :group 'emaclaude)
 
@@ -206,22 +206,9 @@ Expands all file sections so changes are visible per-file."
   "Display MSG in the minibuffer."
   (message "[emaclaude] %s" msg))
 
-(defun emaclaude--show-pr-link (url)
-  "Display PR URL in the diff buffer and minibuffer."
-  (emaclaude--notify (format "PR created: %s" url))
-  (let ((buf (get-buffer emaclaude-buffer-diff)))
-    (when buf
-      (with-current-buffer buf
-        (let ((inhibit-read-only t))
-          (save-excursion
-            (goto-char (point-min))
-            (insert (propertize (format "PR: %s\n\n" url)
-                                'face 'link))))))))
-
 (defun emaclaude--cleanup-buffers-and-windows ()
   "Clean up agent buffers and restore window configuration.
-Called by the daemon's Shutdown effect via emacsclient.
-Does NOT contact the daemon (to avoid circular calls)."
+Called by the Shutdown effect during session teardown."
   ;; Kill agent-shell buffers (agent-shell handles its own ACP cleanup)
   (dolist (name (list emaclaude-buffer-planning
                       emaclaude-buffer-coding
@@ -373,11 +360,7 @@ The resulting buffer is named `emaclaude-buffer-planning'."
                                (or (map-elt config :mode-line-name)
                                    (map-elt config :buffer-name)
                                    "unknown agent")))
-    ;; Spawn all three agent buffers via agent-shell.
-    ;; NOTE: No daemon startup here — this is intentional.  The Rust daemon is
-    ;; being converted to a stateless CLI in Phase 4; HTTP-dependent commands
-    ;; (diff view, PR creation, review submission) will be rewritten in
-    ;; Phases 5-7.  This is NOT a regression but a deliberate migration step.
+    ;; Spawn all three agent buffers via agent-shell
     (emaclaude--spawn-buffer emaclaude-buffer-planning config)
     (emaclaude--spawn-buffer emaclaude-buffer-coding config)
     (emaclaude--spawn-buffer emaclaude-buffer-review config)
