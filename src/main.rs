@@ -68,12 +68,32 @@ fn setup() -> Result<()> {
         }
     }
 
+    // Symlink bin/emaclaude-signal to ~/.local/bin/
+    let signal_src = manifest_dir.join("bin").join("emaclaude-signal");
+    let local_bin = home.join(".local").join("bin");
+    std::fs::create_dir_all(&local_bin)?;
+    let signal_dst = local_bin.join("emaclaude-signal");
+    symlink_file(&signal_src, &signal_dst)?;
+
     // Symlink Doom module
     let emacs_src = manifest_dir.join("emacs");
     let emacs_dst = home.join(".doom.d").join("modules").join("tools").join("emaclaude");
     symlink_dir(&emacs_src, &emacs_dst)?;
 
     tracing::info!("setup complete");
+    Ok(())
+}
+
+fn symlink_file(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if dst.exists() || dst.symlink_metadata().is_ok() {
+        tracing::warn!(dst = %dst.display(), "destination already exists, skipping");
+        return Ok(());
+    }
+    std::os::unix::fs::symlink(src, dst)?;
+    tracing::info!(src = %src.display(), dst = %dst.display(), "symlinked");
     Ok(())
 }
 

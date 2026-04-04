@@ -220,6 +220,15 @@ Uses lsof to find and kill orphaned daemon processes."
           (signal-process (string-to-number pid) 'KILL))
         (emaclaude--notify (format "killed stale daemon pid %s" pid))))))
 
+;;; --- Signal handling ---
+
+(defun emaclaude--handle-event (event &optional payload)
+  "Handle an agent signal EVENT with optional JSON PAYLOAD string.
+Called by the emaclaude-signal CLI script via emacsclient --eval.
+Full orchestration logic will be added in Phase 5."
+  (emaclaude--notify (format "event received: %s (payload: %s)" event (or payload "{}")))
+  t)
+
 ;;; --- Public interactive commands ---
 
 ;;;###autoload

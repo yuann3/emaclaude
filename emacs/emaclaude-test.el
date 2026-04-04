@@ -225,5 +225,27 @@
         (when-let ((b (get-buffer name)))
           (kill-buffer b))))))
 
+;;; --- emaclaude--handle-event tests ---
+
+(ert-deftest emaclaude-test-handle-event-exists ()
+  "emaclaude--handle-event should be defined as a function."
+  (should (fboundp #'emaclaude--handle-event)))
+
+(ert-deftest emaclaude-test-handle-event-returns-t ()
+  "emaclaude--handle-event should return t."
+  (should (eq t (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\"}"))))
+
+(ert-deftest emaclaude-test-handle-event-no-payload ()
+  "emaclaude--handle-event should accept missing payload without error."
+  (should (eq t (emaclaude--handle-event "coding-done"))))
+
+(ert-deftest emaclaude-test-handle-event-notifies ()
+  "emaclaude--handle-event should call emaclaude--notify with event name."
+  (let ((notified nil))
+    (cl-letf (((symbol-function 'emaclaude--notify)
+               (lambda (msg) (setq notified msg))))
+      (emaclaude--handle-event "review-done" "{\"status\":\"approved\"}")
+      (should (string-match-p "review-done" notified)))))
+
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here

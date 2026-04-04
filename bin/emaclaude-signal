@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# emaclaude-signal — notify Emacs of agent phase transitions
+# Usage: emaclaude-signal <event-name> [json-payload]
+
+set -euo pipefail
+
+EVENT="${1:?Usage: emaclaude-signal <event-name> [json-payload]}"
+PAYLOAD="${2:-{\}}"
+
+# Escape backslashes and double quotes for elisp string embedding
+ESCAPED_PAYLOAD="${PAYLOAD//\\/\\\\}"
+ESCAPED_PAYLOAD="${ESCAPED_PAYLOAD//\"/\\\"}"
+
+emacsclient --eval "(emaclaude--handle-event \"${EVENT}\" \"${ESCAPED_PAYLOAD}\")"
