@@ -1,21 +1,21 @@
 #+title: emaclaude
 #+author: Yuan
 
-so recently we got cmux, emdashes, conductor, and whatever the latest "agentic IDE" and they wrap claude in an electron app and charge you for the privilege.
+so we got cursor, windsurf, and whatever the latest "agentic IDE" is this week. they wrap claude in an electron app and charge you for the privilege.
 
-here's the thing though. if you're already running emacs, you have a programmable operating system sitting right there. you can split buffers, run terminals, diff code, talk to external processes, script literally anything in elisp. so why not just... do it in emacs?
+here's the thing though. if you're already running emacs, you have a programmable operating system sitting right there. you can split buffers, run agents, diff code, talk to external processes, script literally anything in elisp. so why not just... do it in emacs?
 
-emaclaude is three claude code sessions running in vterm buffers, coordinated by a small rust daemon. one plans. one codes. one reviews. they talk to each other through http. you watch the whole thing happen live in split panes.
+emaclaude is three claude code sessions running in split buffers, coordinated by a small rust CLI and an elisp orchestrator. one plans. one codes. one reviews. they signal each other through emacs. you watch the whole thing happen live in split panes.
 
-for now, is using Doom Module so its kinda *DOOM EMACS ONLY*, but i will change that in the future
+for now, using Doom Module so it's *DOOM EMACS ONLY*, but i will change that in the future.
 
 * how it works
 
-you plan in one buffer, write spec and PRD with claude. when you're done, hit ~/planning-done~ and the system spawns a coding agent and a review agent in two more buffers. the coding agent implements your spec. when it finishes, the review agent checks the code for quality, security, redundant junk, and spec compliance. if the review agent finds problems, it sends feedback back to the coding agent. they loop until the review agent approves twice in a row (we run confirmation passes because sometimes the reviewer hallucinates an approval).
+you plan in one buffer, write specs and PRDs with claude. when you're done, hit ~/planning-done~ and the system spawns a coding agent and a review agent in two more buffers. the coding agent implements your spec. when it finishes, the review agent checks the code for quality, security, redundant junk, and spec compliance. if the review agent finds problems, it sends feedback back to the coding agent. they loop until the review agent approves twice in a row (we run confirmation passes because sometimes the reviewer hallucinates an approval).
 
 when the loop finishes, a magit diff view opens on the right side of your frame. you can read through the changes, select lines with ~V~, hit ~SPC m c~ to leave comments, and ~SPC m s~ to send them to the coding agent for fixes. when you're happy, ~SPC m p~ creates the PR.
 
-later, when your teammates leave github review comments, you run ~M-x emaclaude-address-github-reviews~ and the coding agent picks them up, fixes everything, replies on github, and pushes. you never leave emacs.
+later, when your teammates leave github review comments, you run ~M-x emaclaude-address-github-reviews~ and the coding agent picks them up, fixes everything, and pushes. you never leave emacs.
 
 * the layout
 
@@ -38,17 +38,17 @@ planning stays on the left so you can reference it while watching the agents wor
 ┌───────────────────────────────────────────────────┐
 │                   Doom Emacs                      │
 │                                                   │
-│  vterm buffers (planning, coding, review, diff)   │
-│  emacs owns all processes                         │
+│  agent-shell buffers (planning, coding, review)   │
+│  elisp orchestrator owns all state + effects      │
 └──────────────────────┬────────────────────────────┘
-                       │ emacsclient --eval
+                       │ JSON pipe
                        │
 ┌──────────────────────┴─────────────────────────────┐
-│              emaclaude daemon (rust)               │
+│              emaclaude CLI (rust)                  │
 │                                                    │
-│  axum http server ── state machine ── emacs bridge │
+│  stateless state machine ── stdin/stdout JSON     │
 └──────────────────────┬─────────────────────────────┘
-                       │ curl
+                       │ emaclaude-signal
                        │
 ┌──────────────────────┴─────────────────────────────┐
 │           claude code skills                       │
@@ -56,9 +56,9 @@ planning stays on the left so you can reference it while watching the agents wor
 └────────────────────────────────────────────────────┘
 #+end_src
 
-the daemon doesn't call any LLMs. it doesn't generate prompts. all the AI work happens inside the claude code sessions, is just a state machine that routes messages between buffers through emacsclient. skills inside claude code sessions curl the daemon when they're done with their phase.
+the CLI doesn't call any LLMs. it doesn't run a server. all the AI work happens inside the claude code sessions. elisp pipes state + event JSON to the CLI, gets back new state + effects, and executes them. skills signal phase transitions through ~emaclaude-signal~ which calls back into emacs via ~emacsclient --eval~.
 
-the whole daemon is ~500 lines of rust. axum for http, tokio for async, figment for config
+the whole CLI is ~130 lines of rust. serde for JSON, clap for arg parsing, nothing else.
 
 * the review loop
 
@@ -86,7 +86,7 @@ there's no iteration cap. the loop runs until the code is actually clean. in pra
 
 * installation
 
-you need rust, claude code cli, doom emacs (with vterm and magit), and the ~gh~ cli.
+you need rust, claude code cli, doom emacs (with magit), and the ~gh~ cli.
 
 #+begin_src bash
 git clone https://github.com/yuann3/emaclaude.git
@@ -95,7 +95,7 @@ cargo install --path .
 emaclaude setup
 #+end_src
 
-~emaclaude setup~ symlinks the claude code skills into =~/.claude/skills/= and the doom module into =~/.doom.d/modules/tools/emaclaude/=. then add it to your doom config and sync:
+~emaclaude setup~ symlinks the claude code skills into =~/.claude/skills/= and the doom module into =~/.doom.d/modules/tools/emaclaude/=. it also puts ~emaclaude-signal~ in =~/.local/bin/= (make sure that's in your PATH). then add it to your doom config and sync:
 
 #+begin_src elisp
 ;; in ~/.doom.d/init.el, under :tools
@@ -115,9 +115,8 @@ M-x load-file RET ~/.doom.d/modules/tools/emaclaude/emaclaude.el RET
 * usage
 
 #+begin_src
-M-x emaclaude-launch          start daemon + open planning buffer
+M-x emaclaude-launch          select LLM backend + open all three agent buffers
 /planning-done                 hand off spec to coding + review agents
-M-x emaclaude-open-diff        open the diff review view
 M-x emaclaude-address-github-reviews   fetch + fix PR comments
 M-x emaclaude-clear-session    kill everything, restore your layout
 #+end_src
@@ -133,22 +132,18 @@ SPC m q    close diff view
 
 * config
 
-optional. defaults work out of the box. if you want to change something:
+optional. defaults work out of the box. if you want to change something, add to your doom config:
 
-#+begin_src bash
-mkdir -p ~/.config/emaclaude
-cp emaclaude.example.toml ~/.config/emaclaude/config.toml
+#+begin_src elisp
+;; number of confirmation passes before human review (default 2)
+(setq emaclaude-confirmation-loops 3)
+
+;; watchdog timeout in seconds — notifies if agents go quiet (default 600)
+(setq emaclaude-watchdog-timeout 300)
+
+;; buffer names (defaults are fine for most people)
+(setq emaclaude-buffer-planning "*mra-planning*")
+(setq emaclaude-buffer-coding "*mra-coding*")
+(setq emaclaude-buffer-review "*mra-review*")
+(setq emaclaude-buffer-diff "*mra-diff*")
 #+end_src
-
-#+begin_src toml
-port = 7878
-emacsclient_path = "emacsclient"
-confirmation_loops = 2
-
-[buffers]
-planning = "*mra-planning*"
-coding = "*mra-coding*"
-review = "*mra-review*"
-diff = "*mra-diff*"
-#+end_src
-
