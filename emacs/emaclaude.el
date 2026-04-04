@@ -65,6 +65,10 @@ This is the serialized WorkflowState from the Rust state machine.")
 (defvar emaclaude--saved-window-config nil
   "Window configuration saved before launching emaclaude.")
 
+(defvar emaclaude--agent-buffers nil
+  "Alist mapping logical names to actual agent-shell buffer objects.
+Keys are `emaclaude-buffer-planning', `emaclaude-buffer-coding', etc.")
+
 (defvar-local emaclaude--review-comments nil
   "Buffer-local list of review comments for the current diff buffer.")
 
@@ -116,33 +120,44 @@ Cancels any existing timer and starts a new one that fires after
 
 (defun emaclaude--spawn-buffer (name config)
   "Create an agent-shell buffer for NAME using agent CONFIG.
-Starts the agent-shell session via ACP and renames the buffer to NAME.
+Starts the agent-shell session via ACP and registers the buffer
+in `emaclaude--agent-buffers' under NAME (without renaming it).
 CONFIG is an agent-shell agent configuration alist."
   (let* ((default-directory (or (and (fboundp 'doom-project-root) (doom-project-root))
                                 (and (fboundp 'projectile-project-root) (projectile-project-root))
                                 default-directory))
          (buf (agent-shell-start :config config)))
     (when (and buf (buffer-live-p buf))
-      (with-current-buffer buf
-        (rename-buffer name t)))
+      (setf (alist-get name emaclaude--agent-buffers nil nil #'equal) buf))
     buf))
+
+(defun emaclaude--get-buffer (name)
+  "Get the agent-shell buffer registered under logical NAME.
+Returns the buffer object or nil if not found or not alive."
+  (let ((buf (alist-get name emaclaude--agent-buffers nil nil #'equal)))
+    (when (and buf (buffer-live-p buf))
+      buf)))
 
 (defun emaclaude--split-layout ()
   "Create a three-way split: planning left, coding top-right, review bottom-right."
   (delete-other-windows)
-  ;; Left: planning
-  (switch-to-buffer (get-buffer-create emaclaude-buffer-planning))
-  ;; Right side
-  (let ((right-window (split-window-right)))
-    (select-window right-window)
-    ;; Top-right: coding
-    (switch-to-buffer (get-buffer-create emaclaude-buffer-coding))
-    ;; Bottom-right: review
-    (let ((bottom-right (split-window-below)))
-      (select-window bottom-right)
-      (switch-to-buffer (get-buffer-create emaclaude-buffer-review))))
-  ;; Return focus to planning
-  (select-window (get-buffer-window emaclaude-buffer-planning)))
+  (let ((plan-buf (emaclaude--get-buffer emaclaude-buffer-planning))
+        (code-buf (emaclaude--get-buffer emaclaude-buffer-coding))
+        (review-buf (emaclaude--get-buffer emaclaude-buffer-review)))
+    ;; Left: planning
+    (when plan-buf (switch-to-buffer plan-buf))
+    ;; Right side
+    (let ((right-window (split-window-right)))
+      (select-window right-window)
+      ;; Top-right: coding
+      (when code-buf (switch-to-buffer code-buf))
+      ;; Bottom-right: review
+      (let ((bottom-right (split-window-below)))
+        (select-window bottom-right)
+        (when review-buf (switch-to-buffer review-buf))))
+    ;; Return focus to planning
+    (when plan-buf
+      (select-window (get-buffer-window plan-buf)))))
 
 (defun emaclaude--send-to-buffer (name text)
   "Send TEXT to the agent-shell buffer named NAME.
@@ -153,19 +168,19 @@ Uses agent-shell-insert to submit the text as a prompt."
 
 (defun emaclaude-spawn-agent (name)
   "Spawn an agent-shell buffer with NAME using the stored config.
-If a buffer with NAME already exists, returns it without spawning a new one.
+If a buffer registered under NAME already exists, returns it.
 Uses `emaclaude--selected-agent-config' set during `emaclaude-launch'.
 Signals an error if no config has been selected."
   (unless emaclaude--selected-agent-config
     (user-error "No agent config selected; run `emaclaude-launch' first"))
-  (or (get-buffer name)
+  (or (emaclaude--get-buffer name)
       (emaclaude--spawn-buffer name emaclaude--selected-agent-config)))
 
 (defun emaclaude-send-to-agent (name message)
-  "Send MESSAGE to the agent-shell buffer named NAME.
+  "Send MESSAGE to the agent-shell buffer registered under NAME.
 If the agent is busy, enqueue MESSAGE for automatic delivery.
 Returns nil if the buffer does not exist."
-  (let ((buf (get-buffer name)))
+  (let ((buf (emaclaude--get-buffer name)))
     (when buf
       (emaclaude--log-event "send-to-agent" nil name message)
       (with-current-buffer buf
@@ -211,18 +226,20 @@ Expands all file sections so changes are visible per-file."
 (defun emaclaude--cleanup-buffers-and-windows ()
   "Clean up agent buffers and restore window configuration.
 Called by the Shutdown effect during session teardown."
-  ;; Kill agent-shell buffers (agent-shell handles its own ACP cleanup)
-  (dolist (name (list emaclaude-buffer-planning
-                      emaclaude-buffer-coding
-                      emaclaude-buffer-review
-                      emaclaude-buffer-diff))
-    (let ((buf (get-buffer name)))
+  ;; Kill registered agent-shell buffers
+  (dolist (entry emaclaude--agent-buffers)
+    (let ((buf (cdr entry)))
       (when (and buf (buffer-live-p buf))
         (let ((proc (get-buffer-process buf)))
           (when proc
             (set-process-query-on-exit-flag proc nil)))
         (kill-buffer buf))))
+  ;; Kill diff buffer by name (not in agent-buffers alist)
+  (let ((diff-buf (get-buffer emaclaude-buffer-diff)))
+    (when (and diff-buf (buffer-live-p diff-buf))
+      (kill-buffer diff-buf)))
   ;; Clear state
+  (setq emaclaude--agent-buffers nil)
   (setq emaclaude--selected-agent-config nil)
   (setq emaclaude--workflow-state "\"Idle\"")
   ;; Restore window configuration
