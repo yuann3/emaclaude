@@ -11,4 +11,5 @@ PAYLOAD="${2:-{\}}"
 ESCAPED_PAYLOAD="${PAYLOAD//\\/\\\\}"
 ESCAPED_PAYLOAD="${ESCAPED_PAYLOAD//\"/\\\"}"
 
-emacsclient --eval "(emaclaude--handle-event \"${EVENT}\" \"${ESCAPED_PAYLOAD}\")"
+# Use the dedicated emaclaude server socket to reach the correct Emacs instance
+emacsclient -s emaclaude --eval "(emaclaude--handle-event \"${EVENT}\" \"${ESCAPED_PAYLOAD}\")"

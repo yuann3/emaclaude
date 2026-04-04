@@ -76,6 +76,10 @@ Keys are `emaclaude-buffer-planning', `emaclaude-buffer-coding', etc.")
   "Timer for the inactivity watchdog.
 Fires after `emaclaude-watchdog-timeout' seconds with no signal.")
 
+(defvar emaclaude--server-name "emaclaude"
+  "Server name used by emaclaude for emacsclient communication.
+A dedicated server name avoids conflicts with the default Emacs daemon.")
+
 ;;; --- Logging ---
 
 (defun emaclaude--log-event (event-type &optional from to payload)
@@ -195,17 +199,18 @@ Signals an error if no config has been selected and no buffer exists."
 
 (defun emaclaude-send-to-agent (name message)
   "Send MESSAGE to the agent-shell buffer registered under NAME.
-If the agent is busy, enqueue MESSAGE for automatic delivery.
-Returns nil if the buffer does not exist."
+Uses agent-shell-queue-request which handles busy queueing and
+session readiness internally. Returns nil if the buffer does not exist."
   (let ((buf (emaclaude--get-buffer name)))
     (when buf
       (emaclaude--log-event "send-to-agent" nil name message)
       (with-current-buffer buf
-        (if (shell-maker-busy)
-            ;; NOTE: agent-shell--enqueue-request is a private API.
-            ;; No public queueing API exists as of agent-shell 0.33.
-            (agent-shell--enqueue-request :prompt message)
-          (shell-maker-submit :input message)))
+        (condition-case err
+            (agent-shell-queue-request message)
+          (error
+           (emaclaude--notify
+            (format "send-to-agent failed for %s: %s"
+                    name (error-message-string err))))))
       t)))
 
 (defun emaclaude--diff-base ()
@@ -395,8 +400,15 @@ the CLI binary, updates workflow state, and dispatches resulting effects."
 (defun emaclaude-launch ()
   "Prompt for an LLM backend and spawn an agent-shell planning buffer.
 The user selects from available agent-shell backends via completing-read.
-The resulting buffer is named `emaclaude-buffer-planning'."
+The resulting buffer is named `emaclaude-buffer-planning'.
+Ensures an Emacs server is running so emaclaude-signal can reach this instance."
   (interactive)
+  ;; Start a dedicated Emacs server so emaclaude-signal can reach
+  ;; this specific Emacs instance (not the default daemon).
+  (require 'server)
+  (unless (server-running-p emaclaude--server-name)
+    (let ((server-name emaclaude--server-name))
+      (server-start)))
   ;; Prompt user to select an LLM backend from agent-shell configs
   (let ((config (agent-shell-select-config :prompt "Select LLM backend: ")))
     (unless config
@@ -425,7 +437,11 @@ performs direct cleanup as a safety net."
   ;; Cancel watchdog timer
   (emaclaude--cancel-watchdog)
   ;; Safety net: ensure cleanup even if state machine fails
-  (emaclaude--cleanup-buffers-and-windows))
+  (emaclaude--cleanup-buffers-and-windows)
+  ;; Stop the dedicated server
+  (when (server-running-p emaclaude--server-name)
+    (let ((server-name emaclaude--server-name))
+      (server-force-delete))))
 
 ;;;###autoload
 (defun emaclaude-address-github-reviews ()
