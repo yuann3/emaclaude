@@ -153,11 +153,13 @@ Uses agent-shell-insert to submit the text as a prompt."
 
 (defun emaclaude-spawn-agent (name)
   "Spawn an agent-shell buffer with NAME using the stored config.
+If a buffer with NAME already exists, returns it without spawning a new one.
 Uses `emaclaude--selected-agent-config' set during `emaclaude-launch'.
 Signals an error if no config has been selected."
   (unless emaclaude--selected-agent-config
     (user-error "No agent config selected; run `emaclaude-launch' first"))
-  (emaclaude--spawn-buffer name emaclaude--selected-agent-config))
+  (or (get-buffer name)
+      (emaclaude--spawn-buffer name emaclaude--selected-agent-config)))
 
 (defun emaclaude-send-to-agent (name message)
   "Send MESSAGE to the agent-shell buffer named NAME.
@@ -281,9 +283,12 @@ effects with data)."
    ((assoc 'SpawnCodingAgent effect)
     (let* ((data (cdr (assoc 'SpawnCodingAgent effect)))
            (prompt (alist-get 'prompt data))
-           (spec-path (alist-get 'spec_path data)))
+           (spec-path (alist-get 'spec_path data))
+           (full-prompt (if spec-path
+                            (format "%s\n\nSpec file: %s" prompt spec-path)
+                          prompt)))
       (emaclaude-spawn-agent emaclaude-buffer-coding)
-      (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
+      (emaclaude-send-to-agent emaclaude-buffer-coding full-prompt)))
    ((assoc 'SendToCodingAgent effect)
     (let ((prompt (alist-get 'prompt (cdr (assoc 'SendToCodingAgent effect)))))
       (emaclaude-send-to-agent emaclaude-buffer-coding prompt)))
