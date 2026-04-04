@@ -348,10 +348,17 @@ the CLI binary, updates workflow state, and dispatches resulting effects."
                         (event . ,rust-event)
                         (config . ((confirmation_loops . ,emaclaude-confirmation-loops)))))
                (input-json (json-encode input))
-               (cmd (format "echo %s | %s transition"
-                            (shell-quote-argument input-json)
-                            (shell-quote-argument emaclaude-daemon-path)))
-               (output (shell-command-to-string cmd))
+               (output (with-temp-buffer
+                         (insert input-json)
+                         (let ((exit-code (call-process-region
+                                          (point-min) (point-max)
+                                          emaclaude-daemon-path
+                                          t t nil "transition")))
+                           (unless (= exit-code 0)
+                             (emaclaude--notify
+                              (format "CLI exited with code %d: %s"
+                                      exit-code (buffer-string))))
+                           (buffer-string))))
                (result (json-read-from-string output))
                (new-state (alist-get 'state result))
                (effects (alist-get 'effects result)))
