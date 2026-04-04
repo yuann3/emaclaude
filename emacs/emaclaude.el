@@ -118,15 +118,31 @@ Cancels any existing timer and starts a new one that fires after
 
 ;;; --- Internal functions ---
 
+(defun emaclaude--role-label (name)
+  "Extract a short role label from logical buffer NAME.
+E.g. \"*mra-planning*\" → \"Planning\"."
+  (cond
+   ((string= name emaclaude-buffer-planning) "Planning")
+   ((string= name emaclaude-buffer-coding) "Coding")
+   ((string= name emaclaude-buffer-review) "Review")
+   (t "Agent")))
+
 (defun emaclaude--spawn-buffer (name config)
   "Create an agent-shell buffer for NAME using agent CONFIG.
-Starts the agent-shell session via ACP and registers the buffer
-in `emaclaude--agent-buffers' under NAME (without renaming it).
+Overrides :buffer-name in the config to include the role label
+so buffers are visually distinguishable. Registers the buffer
+in `emaclaude--agent-buffers' under NAME.
 CONFIG is an agent-shell agent configuration alist."
   (let* ((default-directory (or (and (fboundp 'doom-project-root) (doom-project-root))
                                 (and (fboundp 'projectile-project-root) (projectile-project-root))
                                 default-directory))
-         (buf (agent-shell-start :config config)))
+         (role (emaclaude--role-label name))
+         (labeled-config (cons (cons :buffer-name
+                                     (format "%s [%s]"
+                                             (or (map-elt config :buffer-name) "Agent")
+                                             role))
+                               config))
+         (buf (agent-shell-start :config labeled-config)))
     (when (and buf (buffer-live-p buf))
       (setf (alist-get name emaclaude--agent-buffers nil nil #'equal) buf))
     buf))
