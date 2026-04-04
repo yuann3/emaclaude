@@ -381,14 +381,12 @@ The resulting buffer is named `emaclaude-buffer-planning'."
 
 ;;;###autoload
 (defun emaclaude-address-github-reviews ()
-  "Prompt for a PR number and POST it to the daemon to address GitHub reviews."
+  "Prompt for a PR number and trigger the state machine to address GitHub reviews."
   (interactive)
   (let ((pr-number (read-number "PR number: ")))
-    (emaclaude--post "/address-reviews"
-                     `((pr_number . ,pr-number))
-                     (lambda (_status)
-                       (emaclaude--notify (format "addressing reviews for PR #%d" pr-number))
-                       (kill-buffer (current-buffer))))))
+    (emaclaude--handle-event "address-github-reviews"
+                             (json-encode `((pr_number . ,pr-number))))
+    (emaclaude--notify (format "Addressing reviews for PR #%d" pr-number))))
 
 ;;; --- Review minor mode ---
 

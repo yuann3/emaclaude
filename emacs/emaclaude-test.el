@@ -455,5 +455,29 @@
       (should (equal captured-event "create-pr"))
       (should (equal captured-payload "{}")))))
 
+;;; --- Address GitHub reviews tests ---
+
+(ert-deftest emaclaude-test-address-github-reviews-calls-handle-event ()
+  "emaclaude-address-github-reviews should call emaclaude--handle-event with pr_number."
+  (let ((captured-event nil)
+        (captured-payload nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event)
+               (lambda (event payload)
+                 (setq captured-event event
+                       captured-payload payload)))
+              ((symbol-function 'read-number)
+               (lambda (_prompt) 42))
+              ((symbol-function 'emaclaude--notify) #'ignore))
+      (emaclaude-address-github-reviews)
+      (should (equal captured-event "address-github-reviews"))
+      (let ((parsed (json-read-from-string captured-payload)))
+        (should (equal (alist-get 'pr_number parsed) 42))))))
+
+(ert-deftest emaclaude-test-event-mapping-address-github-reviews ()
+  "emaclaude--map-event should map address-github-reviews to AddressGithubReviews."
+  (let ((result (emaclaude--map-event "address-github-reviews" "{\"pr_number\":99}")))
+    (should (assoc "AddressGithubReviews" result))
+    (should (equal (alist-get 'pr_number (cdr (assoc "AddressGithubReviews" result))) 99))))
+
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
