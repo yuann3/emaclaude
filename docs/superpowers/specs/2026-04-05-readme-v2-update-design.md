@@ -1,3 +1,62 @@
+# README v2 Update Design Spec
+
+## Overview
+
+Full rewrite of README.org to reflect the v2 agent-shell architecture while preserving the original conversational voice and treating the new architecture as the baseline (not a migration).
+
+## Decisions
+
+| Decision | Choice |
+|----------|--------|
+| Format | Keep org-mode (README.org) |
+| Voice | Full rewrite with same conversational/opinionated tone |
+| Approach | Experience-first — workflow stays front and center, architecture is implementation detail |
+| Architecture diagram | ~15 lines, same size as current |
+| Config section | Replace TOML with elisp customize examples |
+| Sections | Keep same 8 sections, just update content |
+
+## Section-by-Section Changes
+
+### 1. Intro/Philosophy
+- Update Electron wrapper examples (cmux/emdashes/conductor → cursor/windsurf)
+- Remove "vterm" — just say "split buffers"
+- Change "rust daemon" → "rust CLI and elisp orchestrator"
+- Change "talk through http" → "signal each other through emacs"
+
+### 2. How It Works
+- Keep identical — workflow description was already accurate
+- Remove "replies on github" detail
+
+### 3. The Layout
+- No changes — buffer names and layout identical in v2
+
+### 4. Architecture
+- vterm → agent-shell
+- "daemon" → "CLI"
+- "axum http server" → "stateless state machine, stdin/stdout JSON"
+- "curl" → "emaclaude-signal"
+- Update line count (~500 → ~130) and deps (axum/tokio/figment → serde/clap)
+
+### 5. The Review Loop
+- No changes — review loop logic identical in v2
+
+### 6. Installation
+- Remove "vterm" from requirements (agent-shell is elisp package dep)
+- Add note about `emaclaude-signal` in `~/.local/bin/` needing to be in PATH
+
+### 7. Usage
+- Update `emaclaude-launch` description: "select LLM backend + open all three agent buffers"
+- Remove `M-x emaclaude-open-diff` — diff view now opens automatically
+
+### 8. Config
+- Replace TOML config with elisp `setq` examples
+- Remove `port` and `emacsclient_path` (no longer exist)
+- Add `emaclaude-watchdog-timeout` (new in v2)
+- Add comments explaining each option
+
+## Full Proposed README
+
+```org
 #+title: emaclaude
 #+author: Yuan
 
@@ -147,3 +206,8 @@ optional. defaults work out of the box. if you want to change something, add to 
 (setq emaclaude-buffer-review "*mra-review*")
 (setq emaclaude-buffer-diff "*mra-diff*")
 #+end_src
+```
+
+## Implementation
+
+Single file change: replace contents of `README.org` with the proposed content above.

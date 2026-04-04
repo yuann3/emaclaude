@@ -32,34 +32,21 @@ committing logical units of work as you go. When you are done with a
 significant milestone or the full implementation, run /coding-done.
 ```
 
-## Step 3: POST to the emaclaude daemon
+## Step 3: Signal emaclaude
 
-Run the following curl command, substituting the actual `prompt` and `spec_path` values:
-
-```bash
-curl -s -X POST http://localhost:7878/planning-done \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "<prompt>",
-    "spec_path": "<spec_path>"
-  }'
-```
-
-Use `jq` to build the JSON payload safely so that quotes and newlines in the prompt are properly escaped:
+Use `jq` to build the JSON payload safely so that quotes and newlines in the prompt are properly escaped, then signal Emacs:
 
 ```bash
-curl -s -X POST http://localhost:7878/planning-done \
-  -H "Content-Type: application/json" \
-  -d "$(jq -n --arg prompt "<prompt>" --arg spec_path "<spec_path>" \
-        '{prompt: $prompt, spec_path: $spec_path}')"
+emaclaude-signal planning-done "$(jq -n --arg prompt "<prompt>" --arg spec_path "<spec_path>" \
+  '{prompt: $prompt, spec_path: $spec_path}')"
 ```
 
 ## Step 4: Confirm to the user
 
-After the curl command succeeds (HTTP 200), tell the user:
+After the signal command succeeds (exit code 0), tell the user:
 
-> Planning complete. The emaclaude daemon has been notified. The coding agent and review agent will be spawned in their Emacs vterm buffers and will begin working on the spec shortly.
+> Planning complete. Emacs has been notified. The coding agent and review agent will begin working on the spec shortly.
 
-If the curl command fails (connection refused, non-200 response, etc.), tell the user:
+If the signal command fails (non-zero exit code), tell the user:
 
-> Could not reach the emaclaude daemon at http://localhost:7878. Make sure the daemon is running (`emaclaude` binary) and try again.
+> Could not reach Emacs via emacsclient. Make sure Emacs is running with a server (`M-x server-start`) and try again.
