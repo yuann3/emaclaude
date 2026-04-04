@@ -333,6 +333,7 @@ effects with data)."
       (emaclaude--notify message)))
    (t (emaclaude--notify (format "unknown effect: %S" effect)))))
 
+;;;###autoload
 (defun emaclaude--handle-event (event &optional payload)
   "Handle an agent signal EVENT with optional JSON PAYLOAD string.
 Called by the emaclaude-signal CLI script via emacsclient --eval.
