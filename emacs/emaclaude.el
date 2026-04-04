@@ -186,11 +186,12 @@ Uses agent-shell-insert to submit the text as a prompt."
   "Spawn an agent-shell buffer with NAME using the stored config.
 If a buffer registered under NAME already exists, returns it.
 Uses `emaclaude--selected-agent-config' set during `emaclaude-launch'.
-Signals an error if no config has been selected."
-  (unless emaclaude--selected-agent-config
-    (user-error "No agent config selected; run `emaclaude-launch' first"))
+Signals an error if no config has been selected and no buffer exists."
   (or (emaclaude--get-buffer name)
-      (emaclaude--spawn-buffer name emaclaude--selected-agent-config)))
+      (progn
+        (unless emaclaude--selected-agent-config
+          (user-error "No agent config selected; run `emaclaude-launch' first"))
+        (emaclaude--spawn-buffer name emaclaude--selected-agent-config))))
 
 (defun emaclaude-send-to-agent (name message)
   "Send MESSAGE to the agent-shell buffer registered under NAME.
