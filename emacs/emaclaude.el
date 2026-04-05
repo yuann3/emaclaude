@@ -241,16 +241,26 @@ Uses agent-shell-insert to submit the text as a prompt."
     (when buf
       (agent-shell-insert :text text :submit t :shell-buffer buf))))
 
+(defun emaclaude--buffer-name-to-role (name)
+  "Map buffer NAME to its role symbol.
+Returns `planning', `coding', or `review' based on the buffer name."
+  (cond
+   ((string= name emaclaude-buffer-planning) 'planning)
+   ((string= name emaclaude-buffer-coding) 'coding)
+   ((string= name emaclaude-buffer-review) 'review)
+   (t nil)))
+
 (defun emaclaude-spawn-agent (name)
   "Spawn an agent-shell buffer with NAME using the stored config.
 If a buffer registered under NAME already exists, returns it.
-Uses `emaclaude--selected-agent-config' set during `emaclaude-launch'.
+Looks up the config from `emaclaude--agent-configs' based on the buffer role.
 Signals an error if no config has been selected and no buffer exists."
   (or (emaclaude--get-buffer name)
-      (progn
-        (unless emaclaude--selected-agent-config
-          (user-error "No agent config selected; run `emaclaude-launch' first"))
-        (emaclaude--spawn-buffer name emaclaude--selected-agent-config))))
+      (let* ((role (emaclaude--buffer-name-to-role name))
+             (config (and role (alist-get role emaclaude--agent-configs))))
+        (unless config
+          (user-error "No agent config for %s; run `emaclaude-launch' first" name))
+        (emaclaude--spawn-buffer name config))))
 
 (defun emaclaude-send-to-agent (name message)
   "Send MESSAGE to the agent-shell buffer registered under NAME.
@@ -317,7 +327,7 @@ Called by the Shutdown effect during session teardown."
       (kill-buffer diff-buf)))
   ;; Clear state
   (setq emaclaude--agent-buffers nil)
-  (setq emaclaude--selected-agent-config nil)
+  (setq emaclaude--agent-configs nil)
   (setq emaclaude--workflow-state "\"Idle\"")
   ;; Restore window configuration
   (when emaclaude--saved-window-config
@@ -453,9 +463,11 @@ the CLI binary, updates workflow state, and dispatches resulting effects."
 
 ;;;###autoload
 (defun emaclaude-launch ()
-  "Prompt for an LLM backend and spawn an agent-shell planning buffer.
-The user selects from available agent-shell backends via completing-read.
-The resulting buffer is named `emaclaude-buffer-planning'.
+  "Launch emaclaude with configured agent backends.
+Without prefix arg: silently uses configured defaults from defcustoms
+\(`emaclaude-planning-agent', `emaclaude-coding-agent', `emaclaude-review-agent'\).
+With prefix arg (C-u): prompts for all three agents via `agent-shell-select-config'.
+
 Ensures an Emacs server is running so emaclaude-signal can reach this instance."
   (interactive)
   ;; Start a dedicated Emacs server so emaclaude-signal can reach
@@ -464,20 +476,37 @@ Ensures an Emacs server is running so emaclaude-signal can reach this instance."
   (unless (server-running-p emaclaude--server-name)
     (let ((server-name emaclaude--server-name))
       (server-start)))
-  ;; Prompt user to select an LLM backend from agent-shell configs
-  (let ((config (agent-shell-select-config :prompt "Select LLM backend: ")))
-    (unless config
-      (user-error "No agent config selected"))
+  ;; Resolve agent configs based on prefix arg
+  (let ((planning-config nil)
+        (coding-config nil)
+        (review-config nil))
+    (if current-prefix-arg
+        ;; With prefix: prompt for all three
+        (progn
+          (setq planning-config (agent-shell-select-config :prompt "Select planning agent: "))
+          (unless planning-config (user-error "No planning agent selected"))
+          (setq coding-config (agent-shell-select-config :prompt "Select coding agent: "))
+          (unless coding-config (user-error "No coding agent selected"))
+          (setq review-config (agent-shell-select-config :prompt "Select review agent: "))
+          (unless review-config (user-error "No review agent selected")))
+      ;; Without prefix: resolve from defcustoms
+      (setq planning-config (emaclaude--resolve-agent-config 'planning))
+      (setq coding-config (emaclaude--resolve-agent-config 'coding))
+      (setq review-config (emaclaude--resolve-agent-config 'review)))
+    ;; Store resolved configs in session state
     (setq emaclaude--saved-window-config (current-window-configuration))
-    (setq emaclaude--selected-agent-config config)
-    (emaclaude--notify (format "launching with %s"
-                               (or (map-elt config :mode-line-name)
-                                   (map-elt config :buffer-name)
-                                   "unknown agent")))
+    (setq emaclaude--agent-configs
+          `((planning . ,planning-config)
+            (coding . ,coding-config)
+            (review . ,review-config)))
+    (emaclaude--notify (format "launching with planning=%s, coding=%s, review=%s"
+                               (or (map-elt planning-config :mode-line-name) "?")
+                               (or (map-elt coding-config :mode-line-name) "?")
+                               (or (map-elt review-config :mode-line-name) "?")))
     ;; Spawn all three agent buffers via agent-shell
-    (emaclaude--spawn-buffer emaclaude-buffer-planning config)
-    (emaclaude--spawn-buffer emaclaude-buffer-coding config)
-    (emaclaude--spawn-buffer emaclaude-buffer-review config)
+    (emaclaude--spawn-buffer emaclaude-buffer-planning planning-config)
+    (emaclaude--spawn-buffer emaclaude-buffer-coding coding-config)
+    (emaclaude--spawn-buffer emaclaude-buffer-review review-config)
     (emaclaude--split-layout)))
 
 ;;;###autoload
