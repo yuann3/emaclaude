@@ -7,6 +7,7 @@
 ;; Provide the feature first so (require 'agent-shell) in emaclaude.el succeeds
 (unless (featurep 'agent-shell)
   (defvar agent-shell-agent-configs nil)
+  (defvar agent-shell-preferred-agent-config nil)
   (defun agent-shell-select-config (&rest _) nil)
   (cl-defun agent-shell-start (&key config) nil)
   (cl-defun agent-shell-insert (&key text submit shell-buffer) nil)
@@ -60,12 +61,12 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 ;;; --- Backend selection state ---
 
 (ert-deftest emaclaude-test-selected-backend-variable-exists ()
-  "emaclaude--selected-agent-config should be a defined variable."
-  (should (boundp 'emaclaude--selected-agent-config)))
+  "emaclaude--agent-configs should be a defined variable."
+  (should (boundp 'emaclaude--agent-configs)))
 
 (ert-deftest emaclaude-test-selected-backend-initially-nil ()
-  "emaclaude--selected-agent-config should be nil initially."
-  (should (null emaclaude--selected-agent-config)))
+  "emaclaude--agent-configs should be nil initially."
+  (should (null emaclaude--agent-configs)))
 
 ;;; --- Buffer name customization ---
 
@@ -615,6 +616,106 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 (ert-deftest emaclaude-test-watchdog-timeout-default ()
   "emaclaude-watchdog-timeout should default to 600."
   (should (= emaclaude-watchdog-timeout 600)))
+
+;;; --- Per-agent backend configuration tests ---
+
+(ert-deftest emaclaude-test-planning-agent-defcustom-exists ()
+  "emaclaude-planning-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-planning-agent))
+  (should (custom-variable-p 'emaclaude-planning-agent)))
+
+(ert-deftest emaclaude-test-planning-agent-default-nil ()
+  "emaclaude-planning-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-planning-agent))))
+
+(ert-deftest emaclaude-test-coding-agent-defcustom-exists ()
+  "emaclaude-coding-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-coding-agent))
+  (should (custom-variable-p 'emaclaude-coding-agent)))
+
+(ert-deftest emaclaude-test-coding-agent-default-nil ()
+  "emaclaude-coding-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-coding-agent))))
+
+(ert-deftest emaclaude-test-review-agent-defcustom-exists ()
+  "emaclaude-review-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-review-agent))
+  (should (custom-variable-p 'emaclaude-review-agent)))
+
+(ert-deftest emaclaude-test-review-agent-default-nil ()
+  "emaclaude-review-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-review-agent))))
+
+(ert-deftest emaclaude-test-agent-configs-variable-exists ()
+  "emaclaude--agent-configs should be a defined variable."
+  (should (boundp 'emaclaude--agent-configs)))
+
+(ert-deftest emaclaude-test-agent-configs-initially-nil ()
+  "emaclaude--agent-configs should be nil initially."
+  (should (null emaclaude--agent-configs)))
+
+;;; --- emaclaude--resolve-agent-symbol tests ---
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-exists ()
+  "emaclaude--resolve-agent-symbol should be defined."
+  (should (fboundp #'emaclaude--resolve-agent-symbol)))
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-finds-config ()
+  "emaclaude--resolve-agent-symbol should return matching config from agent-shell-agent-configs."
+  (let ((agent-shell-agent-configs
+         '((claude-code . ((:model . "claude") (:buffer-name . "Claude")))
+           (codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+    (let ((result (emaclaude--resolve-agent-symbol 'claude-code)))
+      (should (equal (alist-get :model result) "claude"))
+      (should (equal (alist-get :buffer-name result) "Claude")))))
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-errors-on-not-found ()
+  "emaclaude--resolve-agent-symbol should signal error when symbol not found."
+  (let ((agent-shell-agent-configs
+         '((claude-code . ((:model . "claude"))))))
+    (should-error (emaclaude--resolve-agent-symbol 'nonexistent) :type 'user-error)))
+
+;;; --- emaclaude--resolve-agent-config tests ---
+
+(ert-deftest emaclaude-test-resolve-agent-config-exists ()
+  "emaclaude--resolve-agent-config should be defined."
+  (should (fboundp #'emaclaude--resolve-agent-config)))
+
+(ert-deftest emaclaude-test-resolve-agent-config-uses-defcustom ()
+  "emaclaude--resolve-agent-config should use the role-specific defcustom."
+  (let ((emaclaude-planning-agent 'claude-code)
+        (agent-shell-agent-configs
+         '((claude-code . ((:model . "claude") (:buffer-name . "Claude"))))))
+    (let ((result (emaclaude--resolve-agent-config 'planning)))
+      (should (equal (alist-get :model result) "claude")))))
+
+(ert-deftest emaclaude-test-resolve-agent-config-inherits-when-nil ()
+  "emaclaude--resolve-agent-config should inherit from agent-shell-preferred-agent-config when defcustom is nil."
+  (let ((emaclaude-coding-agent nil)
+        (agent-shell-preferred-agent-config 'codex)
+        (agent-shell-agent-configs
+         '((codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+    (let ((result (emaclaude--resolve-agent-config 'coding)))
+      (should (equal (alist-get :model result) "codex")))))
+
+(ert-deftest emaclaude-test-resolve-agent-config-errors-when-both-nil ()
+  "emaclaude--resolve-agent-config should error when defcustom and preferred are both nil."
+  (let ((emaclaude-review-agent nil)
+        (agent-shell-preferred-agent-config nil))
+    (should-error (emaclaude--resolve-agent-config 'review) :type 'user-error)))
+
+(ert-deftest emaclaude-test-resolve-agent-config-all-roles ()
+  "emaclaude--resolve-agent-config should work for planning, coding, and review roles."
+  (let ((emaclaude-planning-agent 'agent-a)
+        (emaclaude-coding-agent 'agent-b)
+        (emaclaude-review-agent 'agent-c)
+        (agent-shell-agent-configs
+         '((agent-a . ((:id . "a")))
+           (agent-b . ((:id . "b")))
+           (agent-c . ((:id . "c"))))))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'planning)) "a"))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'coding)) "b"))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'review)) "c"))))
 
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here

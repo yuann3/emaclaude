@@ -40,6 +40,30 @@
   :type 'string
   :group 'emaclaude)
 
+(defcustom emaclaude-planning-agent nil
+  "Agent backend for the planning agent.
+A symbol identifying an agent in `agent-shell-agent-configs' (e.g., `claude-code').
+When nil, inherits from `agent-shell-preferred-agent-config'."
+  :type '(choice (const :tag "Inherit from agent-shell" nil)
+                 (symbol :tag "Agent identifier"))
+  :group 'emaclaude)
+
+(defcustom emaclaude-coding-agent nil
+  "Agent backend for the coding agent.
+A symbol identifying an agent in `agent-shell-agent-configs' (e.g., `claude-code').
+When nil, inherits from `agent-shell-preferred-agent-config'."
+  :type '(choice (const :tag "Inherit from agent-shell" nil)
+                 (symbol :tag "Agent identifier"))
+  :group 'emaclaude)
+
+(defcustom emaclaude-review-agent nil
+  "Agent backend for the review agent.
+A symbol identifying an agent in `agent-shell-agent-configs' (e.g., `codex').
+When nil, inherits from `agent-shell-preferred-agent-config'."
+  :type '(choice (const :tag "Inherit from agent-shell" nil)
+                 (symbol :tag "Agent identifier"))
+  :group 'emaclaude)
+
 ;;; --- Workflow configuration ---
 
 (defcustom emaclaude-confirmation-loops 2
@@ -59,8 +83,11 @@ Default is 600 (10 minutes)."
   "Current workflow state as a JSON string.
 This is the serialized WorkflowState from the Rust state machine.")
 
-(defvar emaclaude--selected-agent-config nil
-  "The agent-shell config selected at launch time.")
+(defvar emaclaude--agent-configs nil
+  "Alist mapping roles to resolved agent configs for the current session.
+Keys are symbols: `planning', `coding', `review'.
+Values are full agent-shell config alists.
+Set by `emaclaude-launch', cleared by `emaclaude--cleanup-buffers-and-windows'.")
 
 (defvar emaclaude--saved-window-config nil
   "Window configuration saved before launching emaclaude.")
@@ -121,6 +148,34 @@ Cancels any existing timer and starts a new one that fires after
     (setq emaclaude--watchdog-timer nil)))
 
 ;;; --- Internal functions ---
+
+(defun emaclaude--resolve-agent-symbol (symbol)
+  "Resolve SYMBOL to a full agent config alist.
+SYMBOL should be an identifier like `claude-code' or `codex'.
+Returns the matching config from `agent-shell-agent-configs'.
+Signals an error if SYMBOL is not found."
+  (let ((config (alist-get symbol agent-shell-agent-configs)))
+    (unless config
+      (user-error "Agent config `%s' not found in agent-shell-agent-configs" symbol))
+    config))
+
+(defun emaclaude--resolve-agent-config (role)
+  "Resolve the agent config for ROLE.
+ROLE is a symbol: `planning', `coding', or `review'.
+Looks up the corresponding defcustom (e.g., `emaclaude-planning-agent').
+If nil, falls back to `agent-shell-preferred-agent-config'.
+If still nil, signals an error asking user to configure.
+Returns a full agent-shell config alist."
+  (let* ((defcustom-var (pcase role
+                          ('planning emaclaude-planning-agent)
+                          ('coding emaclaude-coding-agent)
+                          ('review emaclaude-review-agent)
+                          (_ (user-error "Unknown role: %s" role))))
+         (agent-symbol (or defcustom-var agent-shell-preferred-agent-config)))
+    (unless agent-symbol
+      (user-error "No agent configured for %s role. Set `emaclaude-%s-agent' or `agent-shell-preferred-agent-config'"
+                  role role))
+    (emaclaude--resolve-agent-symbol agent-symbol)))
 
 (defun emaclaude--role-label (name)
   "Extract a short role label from logical buffer NAME.
