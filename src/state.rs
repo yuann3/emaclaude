@@ -99,6 +99,7 @@ impl WorkflowState {
                 effects: vec![SideEffect::SendToReviewAgent {
                     prompt: format!(
                         "Review the git diff of branch '{}' against main. Check for:\n\
+                         0. Skill usage — discover and apply any relevant local skills for code review (from AGENTS/SKILL instructions), then proceed with this review\n\
                          1. Code quality — clean, idiomatic, well-structured\n\
                          2. Security — no vulnerabilities, injection risks, or leaked secrets\n\
                          3. Redundant code — no duplication, dead code, or unnecessary complexity\n\
