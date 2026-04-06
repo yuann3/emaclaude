@@ -7,6 +7,7 @@
 ;; Provide the feature first so (require 'agent-shell) in emaclaude.el succeeds
 (unless (featurep 'agent-shell)
   (defvar agent-shell-agent-configs nil)
+  (defvar agent-shell-preferred-agent-config nil)
   (defun agent-shell-select-config (&rest _) nil)
   (cl-defun agent-shell-start (&key config) nil)
   (cl-defun agent-shell-insert (&key text submit shell-buffer) nil)
@@ -60,12 +61,12 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 ;;; --- Backend selection state ---
 
 (ert-deftest emaclaude-test-selected-backend-variable-exists ()
-  "emaclaude--selected-agent-config should be a defined variable."
-  (should (boundp 'emaclaude--selected-agent-config)))
+  "emaclaude--agent-configs should be a defined variable."
+  (should (boundp 'emaclaude--agent-configs)))
 
 (ert-deftest emaclaude-test-selected-backend-initially-nil ()
-  "emaclaude--selected-agent-config should be nil initially."
-  (should (null emaclaude--selected-agent-config)))
+  "emaclaude--agent-configs should be nil initially."
+  (should (null emaclaude--agent-configs)))
 
 ;;; --- Buffer name customization ---
 
@@ -83,25 +84,25 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 ;;; --- emaclaude-spawn-agent tests ---
 
 (ert-deftest emaclaude-test-spawn-agent-errors-without-config ()
-  "emaclaude-spawn-agent should error when no config is selected."
-  (let ((emaclaude--selected-agent-config nil))
-    (should-error (emaclaude-spawn-agent "*test-agent*") :type 'user-error)))
+  "emaclaude-spawn-agent should error when no config is in emaclaude--agent-configs."
+  (let ((emaclaude--agent-configs nil))
+    (should-error (emaclaude-spawn-agent emaclaude-buffer-planning) :type 'user-error)))
 
 (ert-deftest emaclaude-test-spawn-agent-creates-buffer ()
   "emaclaude-spawn-agent should create a buffer with the given name."
-  (let* ((emaclaude--selected-agent-config '((:model . "test")))
+  (let* ((emaclaude--agent-configs '((planning . ((:model . "test")))))
          (created-buf (generate-new-buffer "*test-spawn*")))
     (cl-letf (((symbol-function 'agent-shell-start)
                (lambda (&rest _) created-buf)))
       (unwind-protect
-          (let ((result (emaclaude-spawn-agent "*test-spawn*")))
+          (let ((result (emaclaude-spawn-agent emaclaude-buffer-planning)))
             (should (buffer-live-p result)))
         (when (buffer-live-p created-buf)
           (kill-buffer created-buf))))))
 
 (ert-deftest emaclaude-test-spawn-agent-uses-stored-config ()
   "emaclaude-spawn-agent should pass the stored config to agent-shell-start."
-  (let* ((emaclaude--selected-agent-config '((:model . "claude-test")))
+  (let* ((emaclaude--agent-configs '((coding . ((:model . "claude-test")))))
          (captured-config nil)
          (tmp-buf (generate-new-buffer "*test-config*")))
     (cl-letf (((symbol-function 'agent-shell-start)
@@ -110,8 +111,8 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
                  tmp-buf)))
       (unwind-protect
           (progn
-            (emaclaude-spawn-agent "*test-config*")
-            (should (equal captured-config '((:model . "claude-test")))))
+            (emaclaude-spawn-agent emaclaude-buffer-coding)
+            (should (equal (alist-get :model captured-config) "claude-test")))
         (when (buffer-live-p tmp-buf)
           (kill-buffer tmp-buf))))))
 
@@ -119,59 +120,63 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 
 (ert-deftest emaclaude-test-send-to-agent-returns-nil-for-missing-buffer ()
   "emaclaude-send-to-agent should return nil when buffer doesn't exist."
-  (should (null (emaclaude-send-to-agent "*nonexistent-buffer*" "hello"))))
+  (let ((emaclaude--agent-buffers nil))
+    (should (null (emaclaude-send-to-agent "*nonexistent-buffer*" "hello")))))
 
 (ert-deftest emaclaude-test-send-to-agent-submits-when-not-busy ()
-  "emaclaude-send-to-agent should call shell-maker-submit when agent is idle."
-  (let ((submitted-input nil)
-        (buf (generate-new-buffer "*test-idle-agent*")))
-    (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
-              ((symbol-function 'shell-maker-submit)
-               (lambda (&rest args)
-                 (setq submitted-input (plist-get args :input)))))
+  "emaclaude-send-to-agent should use agent-shell-queue-request."
+  (let ((queued-message nil)
+        (buf (generate-new-buffer "*test-idle-agent*"))
+        (emaclaude--agent-buffers nil))
+    (cl-letf (((symbol-function 'agent-shell-queue-request)
+               (lambda (msg) (setq queued-message msg))))
       (unwind-protect
           (progn
-            (emaclaude-send-to-agent (buffer-name buf) "do something")
-            (should (equal submitted-input "do something")))
+            ;; Register buffer in agent-buffers
+            (setf (alist-get "*test-idle-agent*" emaclaude--agent-buffers nil nil #'equal) buf)
+            (emaclaude-send-to-agent "*test-idle-agent*" "do something")
+            (should (equal queued-message "do something")))
         (kill-buffer buf)))))
 
 (ert-deftest emaclaude-test-send-to-agent-enqueues-when-busy ()
-  "emaclaude-send-to-agent should enqueue when agent is busy."
-  (let ((enqueued-prompt nil)
-        (submit-called nil)
-        (buf (generate-new-buffer "*test-busy-agent*")))
-    (cl-letf (((symbol-function 'shell-maker-busy) (lambda () t))
-              ((symbol-function 'shell-maker-submit)
-               (lambda (&rest _) (setq submit-called t)))
-              ((symbol-function 'agent-shell--enqueue-request)
-               (lambda (&rest args)
-                 (setq enqueued-prompt (plist-get args :prompt)))))
+  "emaclaude-send-to-agent should use agent-shell-queue-request even when busy."
+  (let ((queued-message nil)
+        (buf (generate-new-buffer "*test-busy-agent*"))
+        (emaclaude--agent-buffers nil))
+    (cl-letf (((symbol-function 'agent-shell-queue-request)
+               (lambda (msg) (setq queued-message msg))))
       (unwind-protect
           (progn
-            (emaclaude-send-to-agent (buffer-name buf) "queued message")
-            (should (equal enqueued-prompt "queued message"))
-            (should (null submit-called)))
+            ;; Register buffer in agent-buffers
+            (setf (alist-get "*test-busy-agent*" emaclaude--agent-buffers nil nil #'equal) buf)
+            (emaclaude-send-to-agent "*test-busy-agent*" "queued message")
+            (should (equal queued-message "queued message")))
         (kill-buffer buf)))))
 
 (ert-deftest emaclaude-test-send-to-agent-returns-t-on-success ()
   "emaclaude-send-to-agent should return t when buffer exists."
-  (let ((buf (generate-new-buffer "*test-success-agent*")))
-    (cl-letf (((symbol-function 'shell-maker-busy) (lambda () nil))
-              ((symbol-function 'shell-maker-submit) (lambda (&rest _) nil)))
+  (let ((buf (generate-new-buffer "*test-success-agent*"))
+        (emaclaude--agent-buffers nil))
+    (cl-letf (((symbol-function 'agent-shell-queue-request) (lambda (_) nil)))
       (unwind-protect
-          (should (eq t (emaclaude-send-to-agent (buffer-name buf) "msg")))
+          (progn
+            ;; Register buffer in agent-buffers
+            (setf (alist-get "*test-success-agent*" emaclaude--agent-buffers nil nil #'equal) buf)
+            (should (eq t (emaclaude-send-to-agent "*test-success-agent*" "msg"))))
         (kill-buffer buf)))))
 
 ;;; --- emaclaude-launch integration tests ---
 
 (ert-deftest emaclaude-test-launch-saves-window-config ()
-  "emaclaude-launch should save window configuration after config selection."
+  "emaclaude-launch should save window configuration after config resolution."
   (let ((emaclaude--saved-window-config nil)
-        (emaclaude--selected-agent-config nil)
+        (emaclaude--agent-configs nil)
+        (emaclaude-planning-agent 'test-agent)
+        (emaclaude-coding-agent 'test-agent)
+        (emaclaude-review-agent 'test-agent)
+        (agent-shell-agent-configs '((test-agent . ((:model . "test")))))
         (tmp-buf (generate-new-buffer "*test-launch-wc*")))
-    (cl-letf (((symbol-function 'agent-shell-select-config)
-               (lambda (&rest _) '((:model . "test"))))
-              ((symbol-function 'agent-shell-start)
+    (cl-letf (((symbol-function 'agent-shell-start)
                (lambda (&rest _) tmp-buf))
               ((symbol-function 'emaclaude--split-layout) #'ignore))
       (unwind-protect
@@ -179,7 +184,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
             (emaclaude-launch)
             (should (not (null emaclaude--saved-window-config))))
         (setq emaclaude--saved-window-config nil)
-        (setq emaclaude--selected-agent-config nil)
+        (setq emaclaude--agent-configs nil)
         (when (buffer-live-p tmp-buf) (kill-buffer tmp-buf))
         (dolist (name (list emaclaude-buffer-planning
                             emaclaude-buffer-coding
@@ -188,11 +193,13 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 
 (ert-deftest emaclaude-test-launch-spawns-three-buffers ()
   "emaclaude-launch should spawn planning, coding, and review buffers."
-  (let ((emaclaude--selected-agent-config nil)
+  (let ((emaclaude--agent-configs nil)
+        (emaclaude-planning-agent 'test-agent)
+        (emaclaude-coding-agent 'test-agent)
+        (emaclaude-review-agent 'test-agent)
+        (agent-shell-agent-configs '((test-agent . ((:model . "test")))))
         (spawned-names nil))
-    (cl-letf (((symbol-function 'agent-shell-select-config)
-               (lambda (&rest _) '((:model . "test"))))
-              ((symbol-function 'emaclaude--spawn-buffer)
+    (cl-letf (((symbol-function 'emaclaude--spawn-buffer)
                (lambda (name _config)
                  (push name spawned-names)
                  (generate-new-buffer name)))
@@ -203,7 +210,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
             (should (member emaclaude-buffer-planning spawned-names))
             (should (member emaclaude-buffer-coding spawned-names))
             (should (member emaclaude-buffer-review spawned-names)))
-        (setq emaclaude--selected-agent-config nil)
+        (setq emaclaude--agent-configs nil)
         (dolist (name (list emaclaude-buffer-planning
                             emaclaude-buffer-coding
                             emaclaude-buffer-review))
@@ -273,21 +280,30 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude--handle-event should pipe correct JSON to the Rust CLI."
   (let ((emaclaude--workflow-state "\"Idle\"")
         (emaclaude-confirmation-loops 2)
-        (captured-cmd nil))
-    (cl-letf (((symbol-function 'shell-command-to-string)
-               (lambda (cmd)
-                 (setq captured-cmd cmd)
-                 "{\"state\":\"Coding\",\"effects\":[]}")))
+        (captured-program nil)
+        (captured-args nil))
+    (cl-letf (((symbol-function 'call-process-region)
+               (lambda (_start _end program _delete buffer _display &rest args)
+                 (setq captured-program program)
+                 (setq captured-args args)
+                 (when (eq buffer t)
+                   (erase-buffer)
+                   (insert "{\"state\":\"Coding\",\"effects\":[]}"))
+                 0)))
       (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\",\"spec_path\":\"s.md\"}")
-      (should (string-match-p "emaclaude" captured-cmd))
-      (should (string-match-p "transition" captured-cmd)))))
+      (should (string-match-p "emaclaude" captured-program))
+      (should (member "transition" captured-args)))))
 
 (ert-deftest emaclaude-test-handle-event-updates-state ()
   "emaclaude--handle-event should update emaclaude--workflow-state."
   (let ((emaclaude--workflow-state "\"Idle\"")
         (emaclaude-confirmation-loops 2))
-    (cl-letf (((symbol-function 'shell-command-to-string)
-               (lambda (_) "{\"state\":\"Coding\",\"effects\":[]}"))
+    (cl-letf (((symbol-function 'call-process-region)
+               (lambda (_start _end _program _delete buffer _display &rest _args)
+                 (when (eq buffer t)
+                   (erase-buffer)
+                   (insert "{\"state\":\"Coding\",\"effects\":[]}"))
+                 0))
               ((symbol-function 'emaclaude--notify) #'ignore))
       (emaclaude--handle-event "planning-done" "{\"prompt\":\"test\",\"spec_path\":\"s.md\"}")
       (should (equal emaclaude--workflow-state "\"Coding\"")))))
@@ -297,9 +313,12 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   (let ((emaclaude--workflow-state "\"Idle\"")
         (emaclaude-confirmation-loops 2)
         (dispatched-effects nil))
-    (cl-letf (((symbol-function 'shell-command-to-string)
-               (lambda (_)
-                 "{\"state\":\"Coding\",\"effects\":[{\"SpawnCodingAgent\":{\"prompt\":\"test\",\"spec_path\":\"s.md\"}},\"SpawnReviewAgent\"]}"))
+    (cl-letf (((symbol-function 'call-process-region)
+               (lambda (_start _end _program _delete buffer _display &rest _args)
+                 (when (eq buffer t)
+                   (erase-buffer)
+                   (insert "{\"state\":\"Coding\",\"effects\":[{\"SpawnCodingAgent\":{\"prompt\":\"test\",\"spec_path\":\"s.md\"}},\"SpawnReviewAgent\"]}"))
+                 0))
               ((symbol-function 'emaclaude--dispatch-effect)
                (lambda (effect) (push effect dispatched-effects)))
               ((symbol-function 'emaclaude--notify) #'ignore))
@@ -310,8 +329,12 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude--handle-event should return nil when CLI returns error."
   (let ((emaclaude--workflow-state "\"Idle\"")
         (emaclaude-confirmation-loops 2))
-    (cl-letf (((symbol-function 'shell-command-to-string)
-               (lambda (_) "not valid json {{{"))
+    (cl-letf (((symbol-function 'call-process-region)
+               (lambda (_start _end _program _delete buffer _display &rest _args)
+                 (when (eq buffer t)
+                   (erase-buffer)
+                   (insert "not valid json {{{"))
+                 0))
               ((symbol-function 'emaclaude--notify) #'ignore))
       (should (null (emaclaude--handle-event "planning-done" "{\"prompt\":\"t\",\"spec_path\":\"s\"}"))))))
 
@@ -319,18 +342,24 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude--handle-event should return nil when CLI returns JSON error."
   (let ((emaclaude--workflow-state "\"Idle\"")
         (emaclaude-confirmation-loops 2)
-        (notified nil))
-    (cl-letf (((symbol-function 'shell-command-to-string)
-               (lambda (_) "{\"error\":\"invalid transition\"}"))
+        (notified-msgs nil))
+    (cl-letf (((symbol-function 'call-process-region)
+               (lambda (_start _end _program delete buffer _display &rest _args)
+                 ;; When delete is t and buffer is t, we're in the temp buffer context
+                 ;; The function replaces buffer contents with output
+                 (when (eq buffer t)
+                   (erase-buffer)
+                   (insert "{\"error\":\"invalid transition\"}"))
+                 0))
               ((symbol-function 'emaclaude--notify)
-               (lambda (msg) (setq notified msg))))
+               (lambda (msg) (push msg notified-msgs))))
       (should (null (emaclaude--handle-event "coding-done" "{\"branch\":\"x\"}")))
-      (should (string-match-p "invalid transition" notified)))))
+      (should (cl-some (lambda (msg) (string-match-p "invalid transition" msg)) notified-msgs)))))
 
 ;;; --- emaclaude--dispatch-effect tests ---
 
 (ert-deftest emaclaude-test-dispatch-spawn-coding-agent ()
-  "SpawnCodingAgent should spawn buffer and send prompt."
+  "SpawnCodingAgent should spawn buffer and send prompt with spec path."
   (let ((spawned-name nil)
         (sent-name nil)
         (sent-msg nil))
@@ -341,7 +370,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
       (emaclaude--dispatch-effect '((SpawnCodingAgent . ((prompt . "do stuff") (spec_path . "s.md")))))
       (should (equal spawned-name emaclaude-buffer-coding))
       (should (equal sent-name emaclaude-buffer-coding))
-      (should (equal sent-msg "do stuff")))))
+      (should (equal sent-msg "do stuff\n\nSpec file: s.md")))))
 
 (ert-deftest emaclaude-test-dispatch-spawn-review-agent ()
   "SpawnReviewAgent should spawn review buffer."
@@ -567,12 +596,13 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   (let ((emaclaude--watchdog-timer nil)
         (emaclaude-watchdog-timeout 9999)
         (emaclaude--workflow-state "\"Idle\"")
-        (emaclaude--selected-agent-config nil)
+        (emaclaude--agent-configs nil)
         (emaclaude--saved-window-config nil))
     (emaclaude--reset-watchdog)
     (should (timerp emaclaude--watchdog-timer))
     (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
-              ((symbol-function 'emaclaude--notify) #'ignore))
+              ((symbol-function 'emaclaude--notify) #'ignore)
+              ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
       (emaclaude-clear-session))
     (should (null emaclaude--watchdog-timer))))
 
@@ -580,13 +610,14 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude-clear-session should reset workflow state to Idle."
   (let ((emaclaude--workflow-state "\"Coding\"")
         (emaclaude--watchdog-timer nil)
-        (emaclaude--selected-agent-config '((:model . "test")))
+        (emaclaude--agent-configs '((planning . ((:model . "test")))))
         (emaclaude--saved-window-config nil))
     (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
-              ((symbol-function 'emaclaude--notify) #'ignore))
+              ((symbol-function 'emaclaude--notify) #'ignore)
+              ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
       (emaclaude-clear-session))
     (should (equal emaclaude--workflow-state "\"Idle\""))
-    (should (null emaclaude--selected-agent-config))))
+    (should (null emaclaude--agent-configs))))
 
 (ert-deftest emaclaude-test-clear-session-is-interactive ()
   "emaclaude-clear-session should be an interactive command."
@@ -615,6 +646,188 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 (ert-deftest emaclaude-test-watchdog-timeout-default ()
   "emaclaude-watchdog-timeout should default to 600."
   (should (= emaclaude-watchdog-timeout 600)))
+
+;;; --- Per-agent backend configuration tests ---
+
+(ert-deftest emaclaude-test-planning-agent-defcustom-exists ()
+  "emaclaude-planning-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-planning-agent))
+  (should (custom-variable-p 'emaclaude-planning-agent)))
+
+(ert-deftest emaclaude-test-planning-agent-default-nil ()
+  "emaclaude-planning-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-planning-agent))))
+
+(ert-deftest emaclaude-test-coding-agent-defcustom-exists ()
+  "emaclaude-coding-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-coding-agent))
+  (should (custom-variable-p 'emaclaude-coding-agent)))
+
+(ert-deftest emaclaude-test-coding-agent-default-nil ()
+  "emaclaude-coding-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-coding-agent))))
+
+(ert-deftest emaclaude-test-review-agent-defcustom-exists ()
+  "emaclaude-review-agent should be a defined customizable variable."
+  (should (boundp 'emaclaude-review-agent))
+  (should (custom-variable-p 'emaclaude-review-agent)))
+
+(ert-deftest emaclaude-test-review-agent-default-nil ()
+  "emaclaude-review-agent should default to nil (inherit)."
+  (should (null (default-value 'emaclaude-review-agent))))
+
+(ert-deftest emaclaude-test-agent-configs-variable-exists ()
+  "emaclaude--agent-configs should be a defined variable."
+  (should (boundp 'emaclaude--agent-configs)))
+
+(ert-deftest emaclaude-test-agent-configs-initially-nil ()
+  "emaclaude--agent-configs should be nil initially."
+  (should (null emaclaude--agent-configs)))
+
+;;; --- emaclaude--resolve-agent-symbol tests ---
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-exists ()
+  "emaclaude--resolve-agent-symbol should be defined."
+  (should (fboundp #'emaclaude--resolve-agent-symbol)))
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-finds-config ()
+  "emaclaude--resolve-agent-symbol should return matching config from agent-shell-agent-configs."
+  (let ((agent-shell-agent-configs
+         '((claude-code . ((:model . "claude") (:buffer-name . "Claude")))
+           (codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+    (let ((result (emaclaude--resolve-agent-symbol 'claude-code)))
+      (should (equal (alist-get :model result) "claude"))
+      (should (equal (alist-get :buffer-name result) "Claude")))))
+
+(ert-deftest emaclaude-test-resolve-agent-symbol-errors-on-not-found ()
+  "emaclaude--resolve-agent-symbol should signal error when symbol not found."
+  (let ((agent-shell-agent-configs
+         '((claude-code . ((:model . "claude"))))))
+    (should-error (emaclaude--resolve-agent-symbol 'nonexistent) :type 'user-error)))
+
+;;; --- emaclaude--resolve-agent-config tests ---
+
+(ert-deftest emaclaude-test-resolve-agent-config-exists ()
+  "emaclaude--resolve-agent-config should be defined."
+  (should (fboundp #'emaclaude--resolve-agent-config)))
+
+(ert-deftest emaclaude-test-resolve-agent-config-uses-defcustom ()
+  "emaclaude--resolve-agent-config should use the role-specific defcustom."
+  (let ((emaclaude-planning-agent 'claude-code)
+        (agent-shell-agent-configs
+         '((claude-code . ((:model . "claude") (:buffer-name . "Claude"))))))
+    (let ((result (emaclaude--resolve-agent-config 'planning)))
+      (should (equal (alist-get :model result) "claude")))))
+
+(ert-deftest emaclaude-test-resolve-agent-config-inherits-when-nil ()
+  "emaclaude--resolve-agent-config should inherit from agent-shell-preferred-agent-config when defcustom is nil."
+  (let ((emaclaude-coding-agent nil)
+        (agent-shell-preferred-agent-config 'codex)
+        (agent-shell-agent-configs
+         '((codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+    (let ((result (emaclaude--resolve-agent-config 'coding)))
+      (should (equal (alist-get :model result) "codex")))))
+
+(ert-deftest emaclaude-test-resolve-agent-config-errors-when-both-nil ()
+  "emaclaude--resolve-agent-config should error when defcustom and preferred are both nil."
+  (let ((emaclaude-review-agent nil)
+        (agent-shell-preferred-agent-config nil))
+    (should-error (emaclaude--resolve-agent-config 'review) :type 'user-error)))
+
+(ert-deftest emaclaude-test-resolve-agent-config-all-roles ()
+  "emaclaude--resolve-agent-config should work for planning, coding, and review roles."
+  (let ((emaclaude-planning-agent 'agent-a)
+        (emaclaude-coding-agent 'agent-b)
+        (emaclaude-review-agent 'agent-c)
+        (agent-shell-agent-configs
+         '((agent-a . ((:id . "a")))
+           (agent-b . ((:id . "b")))
+           (agent-c . ((:id . "c"))))))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'planning)) "a"))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'coding)) "b"))
+    (should (equal (alist-get :id (emaclaude--resolve-agent-config 'review)) "c"))))
+
+;;; --- emaclaude-launch with per-agent config tests ---
+
+(ert-deftest emaclaude-test-launch-populates-agent-configs ()
+  "emaclaude-launch without prefix should populate emaclaude--agent-configs from defcustoms."
+  (let ((emaclaude--agent-configs nil)
+        (emaclaude-planning-agent 'claude-code)
+        (emaclaude-coding-agent 'claude-code)
+        (emaclaude-review-agent 'codex)
+        (agent-shell-agent-configs
+         '((claude-code . ((:model . "claude")))
+           (codex . ((:model . "codex")))))
+        (tmp-buf (generate-new-buffer "*test-launch-configs*")))
+    (cl-letf (((symbol-function 'agent-shell-start)
+               (lambda (&rest _) tmp-buf))
+              ((symbol-function 'emaclaude--split-layout) #'ignore))
+      (unwind-protect
+          (progn
+            (emaclaude-launch)
+            (should (alist-get 'planning emaclaude--agent-configs))
+            (should (alist-get 'coding emaclaude--agent-configs))
+            (should (alist-get 'review emaclaude--agent-configs))
+            (should (equal (alist-get :model (alist-get 'planning emaclaude--agent-configs)) "claude"))
+            (should (equal (alist-get :model (alist-get 'review emaclaude--agent-configs)) "codex")))
+        (setq emaclaude--agent-configs nil)
+        (when (buffer-live-p tmp-buf) (kill-buffer tmp-buf))
+        (dolist (name (list emaclaude-buffer-planning
+                            emaclaude-buffer-coding
+                            emaclaude-buffer-review))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+(ert-deftest emaclaude-test-launch-with-prefix-prompts-three-times ()
+  "emaclaude-launch with prefix arg should call agent-shell-select-config three times."
+  (let ((emaclaude--agent-configs nil)
+        (select-count 0)
+        (tmp-buf (generate-new-buffer "*test-launch-prefix*")))
+    (cl-letf (((symbol-function 'agent-shell-select-config)
+               (lambda (&rest _)
+                 (cl-incf select-count)
+                 '((:model . "test"))))
+              ((symbol-function 'agent-shell-start)
+               (lambda (&rest _) tmp-buf))
+              ((symbol-function 'emaclaude--split-layout) #'ignore))
+      (unwind-protect
+          (progn
+            (let ((current-prefix-arg '(4)))
+              (emaclaude-launch))
+            (should (= select-count 3)))
+        (setq emaclaude--agent-configs nil)
+        (when (buffer-live-p tmp-buf) (kill-buffer tmp-buf))
+        (dolist (name (list emaclaude-buffer-planning
+                            emaclaude-buffer-coding
+                            emaclaude-buffer-review))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+(ert-deftest emaclaude-test-launch-without-prefix-does-not-prompt ()
+  "emaclaude-launch without prefix arg should not call agent-shell-select-config."
+  (let ((emaclaude--agent-configs nil)
+        (select-called nil)
+        (emaclaude-planning-agent 'test-agent)
+        (emaclaude-coding-agent 'test-agent)
+        (emaclaude-review-agent 'test-agent)
+        (agent-shell-agent-configs
+         '((test-agent . ((:model . "test")))))
+        (tmp-buf (generate-new-buffer "*test-launch-no-prompt*")))
+    (cl-letf (((symbol-function 'agent-shell-select-config)
+               (lambda (&rest _)
+                 (setq select-called t)
+                 '((:model . "test"))))
+              ((symbol-function 'agent-shell-start)
+               (lambda (&rest _) tmp-buf))
+              ((symbol-function 'emaclaude--split-layout) #'ignore))
+      (unwind-protect
+          (progn
+            (emaclaude-launch)
+            (should-not select-called))
+        (setq emaclaude--agent-configs nil)
+        (when (buffer-live-p tmp-buf) (kill-buffer tmp-buf))
+        (dolist (name (list emaclaude-buffer-planning
+                            emaclaude-buffer-coding
+                            emaclaude-buffer-review))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
 
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
