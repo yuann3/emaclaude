@@ -154,7 +154,8 @@ Cancels any existing timer and starts a new one that fires after
 SYMBOL should be an identifier like `claude-code' or `codex'.
 Returns the matching config from `agent-shell-agent-configs'.
 Signals an error if SYMBOL is not found."
-  (let ((config (alist-get symbol agent-shell-agent-configs)))
+  (let ((config (seq-find (lambda (c) (eq (map-elt c :identifier) symbol))
+                          agent-shell-agent-configs)))
     (unless config
       (user-error "Agent config `%s' not found in agent-shell-agent-configs" symbol))
     config))
@@ -164,7 +165,7 @@ Signals an error if SYMBOL is not found."
 ROLE is a symbol: `planning', `coding', or `review'.
 Looks up the corresponding defcustom (e.g., `emaclaude-planning-agent').
 If nil, falls back to `agent-shell-preferred-agent-config'.
-If still nil, signals an error asking user to configure.
+If still nil, prompts user to select via `agent-shell-select-config'.
 Returns a full agent-shell config alist."
   (let* ((defcustom-var (pcase role
                           ('planning emaclaude-planning-agent)
@@ -172,10 +173,21 @@ Returns a full agent-shell config alist."
                           ('review emaclaude-review-agent)
                           (_ (user-error "Unknown role: %s" role))))
          (agent-symbol (or defcustom-var agent-shell-preferred-agent-config)))
-    (unless agent-symbol
-      (user-error "No agent configured for %s role. Set `emaclaude-%s-agent' or `agent-shell-preferred-agent-config'"
-                  role role))
-    (emaclaude--resolve-agent-symbol agent-symbol)))
+    (if agent-symbol
+        (emaclaude--resolve-agent-symbol agent-symbol)
+      (let ((config (agent-shell-select-config
+                     :prompt (format "Select %s agent: " role))))
+        (unless config
+          (user-error "No agent selected for %s role" role))
+        config))))
+
+(defun emaclaude--ensure-resolved-config (config-or-symbol)
+  "Normalize CONFIG-OR-SYMBOL to a full agent-shell config alist.
+If CONFIG-OR-SYMBOL is a symbol, resolve it via `emaclaude--resolve-agent-symbol'.
+If it is already an alist, return it as-is."
+  (if (symbolp config-or-symbol)
+      (emaclaude--resolve-agent-symbol config-or-symbol)
+    config-or-symbol))
 
 (defun emaclaude--role-label (name)
   "Extract a short role label from logical buffer NAME.
@@ -483,11 +495,14 @@ Ensures an Emacs server is running so emaclaude-signal can reach this instance."
     (if current-prefix-arg
         ;; With prefix: prompt for all three
         (progn
-          (setq planning-config (agent-shell-select-config :prompt "Select planning agent: "))
+          (setq planning-config (emaclaude--ensure-resolved-config
+                                 (agent-shell-select-config :prompt "Select planning agent: ")))
           (unless planning-config (user-error "No planning agent selected"))
-          (setq coding-config (agent-shell-select-config :prompt "Select coding agent: "))
+          (setq coding-config (emaclaude--ensure-resolved-config
+                               (agent-shell-select-config :prompt "Select coding agent: ")))
           (unless coding-config (user-error "No coding agent selected"))
-          (setq review-config (agent-shell-select-config :prompt "Select review agent: "))
+          (setq review-config (emaclaude--ensure-resolved-config
+                               (agent-shell-select-config :prompt "Select review agent: ")))
           (unless review-config (user-error "No review agent selected")))
       ;; Without prefix: resolve from defcustoms
       (setq planning-config (emaclaude--resolve-agent-config 'planning))
