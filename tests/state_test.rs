@@ -399,6 +399,92 @@ fn json_event_with_data() {
 }
 
 #[test]
+fn cycle_complete_from_coding() {
+    let config = default_config();
+    let t = WorkflowState::Coding.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::InsertIntoPlanningBuffer { .. })));
+}
+
+#[test]
+fn cycle_complete_from_reviewing() {
+    let config = default_config();
+    let t = WorkflowState::Reviewing.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+}
+
+#[test]
+fn cycle_complete_from_confirming() {
+    let config = default_config();
+    let t = WorkflowState::Confirming { approval_count: 1 }.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+}
+
+#[test]
+fn cycle_complete_from_human_review() {
+    let config = default_config();
+    let t = WorkflowState::HumanReview.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+}
+
+#[test]
+fn cycle_complete_from_pr_created() {
+    let config = default_config();
+    let t = WorkflowState::PrCreated.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+}
+
+#[test]
+fn cycle_complete_from_idle_is_noop() {
+    let config = default_config();
+    let t = WorkflowState::Idle.next(Event::CycleComplete, &config);
+    assert_eq!(t.state, WorkflowState::Idle);
+    assert!(t.effects.is_empty());
+}
+
+#[test]
+fn cycle_complete_insert_message_content() {
+    let config = default_config();
+    let t = WorkflowState::HumanReview.next(Event::CycleComplete, &config);
+    let msg = t.effects.iter().find_map(|e| match e {
+        SideEffect::InsertIntoPlanningBuffer { message } => Some(message.as_str()),
+        _ => None,
+    });
+    assert!(msg.is_some());
+    assert!(msg.unwrap().contains("Implementation is done"));
+}
+
+#[test]
+fn json_event_cycle_complete() {
+    let event: Event = serde_json::from_str("\"CycleComplete\"").unwrap();
+    assert_eq!(event, Event::CycleComplete);
+}
+
+#[test]
+fn json_side_effect_reset_coding_and_review() {
+    let effect = SideEffect::ResetCodingAndReview;
+    let json = serde_json::to_string(&effect).unwrap();
+    assert_eq!(json, "\"ResetCodingAndReview\"");
+}
+
+#[test]
+fn json_side_effect_insert_into_planning_buffer() {
+    let effect = SideEffect::InsertIntoPlanningBuffer {
+        message: "hello".into(),
+    };
+    let json = serde_json::to_value(&effect).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"InsertIntoPlanningBuffer": {"message": "hello"}})
+    );
+}
+
+#[test]
 fn no_curl_or_localhost_in_any_prompt() {
     let config = default_config();
     // Collect all transitions that produce prompt text
