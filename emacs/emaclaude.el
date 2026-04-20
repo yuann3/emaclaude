@@ -383,8 +383,10 @@ into existing windows when possible, falls back to full re-layout."
           (when (and review-win (window-live-p review-win) new-buf)
             (set-window-buffer review-win new-buf)))))
     ;; Fallback: if any window is missing, redo full layout
-    (unless (and (get-buffer-window (emaclaude--get-buffer emaclaude-buffer-coding))
-                 (get-buffer-window (emaclaude--get-buffer emaclaude-buffer-review)))
+    (unless (and (when-let ((b (emaclaude--get-buffer emaclaude-buffer-coding)))
+                   (get-buffer-window b))
+                 (when-let ((b (emaclaude--get-buffer emaclaude-buffer-review)))
+                   (get-buffer-window b)))
       (emaclaude--split-layout))))
 
 
