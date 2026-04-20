@@ -592,6 +592,13 @@ performs direct cleanup as a safety net."
       (server-force-delete))))
 
 ;;;###autoload
+(defun emaclaude-next-cycle ()
+  "Complete the current cycle and prepare for the next planning session.
+Resets coding and review agents while preserving planning context."
+  (interactive)
+  (emaclaude--handle-event "cycle-complete"))
+
+;;;###autoload
 (defun emaclaude-address-github-reviews ()
   "Prompt for a PR number and trigger the state machine to address GitHub reviews."
   (interactive)

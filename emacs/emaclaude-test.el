@@ -927,5 +927,20 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
                             emaclaude-buffer-review))
           (when-let ((b (get-buffer name))) (kill-buffer b)))))))
 
+;;; --- emaclaude-next-cycle tests ---
+
+(ert-deftest emaclaude-test-next-cycle-is-interactive ()
+  "emaclaude-next-cycle should be an interactive command."
+  (should (commandp #'emaclaude-next-cycle)))
+
+(ert-deftest emaclaude-test-next-cycle-calls-handle-event ()
+  "emaclaude-next-cycle should call emaclaude--handle-event with cycle-complete."
+  (let ((captured-event nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event)
+               (lambda (event &optional payload)
+                 (setq captured-event event))))
+      (emaclaude-next-cycle)
+      (should (equal captured-event "cycle-complete")))))
+
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
