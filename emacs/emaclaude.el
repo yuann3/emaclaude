@@ -378,6 +378,7 @@ Returns an alist suitable for `json-encode'."
       ("address-github-reviews"
        `(("AddressGithubReviews" . ((pr_number . ,(alist-get 'pr_number data))))))
       ("clear-session" "ClearSession")
+      ("cycle-complete" "CycleComplete")
       (_ (error "Unknown event: %s" event)))))
 
 (defun emaclaude--dispatch-effect (effect)

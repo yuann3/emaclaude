@@ -270,6 +270,10 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude--map-event should map clear-session to ClearSession string."
   (should (equal (emaclaude--map-event "clear-session") "ClearSession")))
 
+(ert-deftest emaclaude-test-event-mapping-cycle-complete ()
+  "emaclaude--map-event should map cycle-complete to CycleComplete string."
+  (should (equal (emaclaude--map-event "cycle-complete") "CycleComplete")))
+
 ;;; --- emaclaude--handle-event tests ---
 
 (ert-deftest emaclaude-test-handle-event-exists ()
