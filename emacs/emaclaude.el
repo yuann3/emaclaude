@@ -347,6 +347,46 @@ Called by the Shutdown effect during session teardown."
     (setq emaclaude--saved-window-config nil))
   (emaclaude--notify "session cleared"))
 
+(defun emaclaude--reset-coding-and-review ()
+  "Kill and respawn coding and review agent buffers for a new cycle.
+Preserves the planning buffer and agent configs.  Swaps new buffers
+into existing windows when possible, falls back to full re-layout."
+  ;; Save window references BEFORE killing (buffers have labeled names
+  ;; like "Claude Code [Coding]", so we must grab the window while
+  ;; the old buffer is still alive).
+  (let ((coding-win (when-let ((buf (emaclaude--get-buffer emaclaude-buffer-coding)))
+                      (get-buffer-window buf)))
+        (review-win (when-let ((buf (emaclaude--get-buffer emaclaude-buffer-review)))
+                      (get-buffer-window buf))))
+    ;; Kill coding, review, and diff buffers
+    (dolist (name (list emaclaude-buffer-coding emaclaude-buffer-review))
+      (let ((buf (alist-get name emaclaude--agent-buffers nil nil #'equal)))
+        (when (and buf (buffer-live-p buf))
+          (let ((proc (get-buffer-process buf)))
+            (when proc
+              (set-process-query-on-exit-flag proc nil)))
+          (kill-buffer buf))
+        ;; Remove from registry
+        (setf (alist-get name emaclaude--agent-buffers nil 'remove #'equal) nil)))
+    (let ((diff-buf (get-buffer emaclaude-buffer-diff)))
+      (when (and diff-buf (buffer-live-p diff-buf))
+        (kill-buffer diff-buf)))
+    ;; Respawn with stored configs, swap into saved windows
+    (let ((coding-config (alist-get 'coding emaclaude--agent-configs))
+          (review-config (alist-get 'review emaclaude--agent-configs)))
+      (when coding-config
+        (let ((new-buf (emaclaude--spawn-buffer emaclaude-buffer-coding coding-config)))
+          (when (and coding-win (window-live-p coding-win) new-buf)
+            (set-window-buffer coding-win new-buf))))
+      (when review-config
+        (let ((new-buf (emaclaude--spawn-buffer emaclaude-buffer-review review-config)))
+          (when (and review-win (window-live-p review-win) new-buf)
+            (set-window-buffer review-win new-buf)))))
+    ;; Fallback: if any window is missing, redo full layout
+    (unless (and (get-buffer-window (emaclaude--get-buffer emaclaude-buffer-coding))
+                 (get-buffer-window (emaclaude--get-buffer emaclaude-buffer-review)))
+      (emaclaude--split-layout))))
+
 
 ;;; --- Signal handling ---
 
@@ -396,6 +436,8 @@ effects with data)."
    ((equal effect "Shutdown")
     (setq emaclaude--workflow-state "\"Idle\"")
     (emaclaude--cleanup-buffers-and-windows))
+   ((equal effect "ResetCodingAndReview")
+    (emaclaude--reset-coding-and-review))
    ;; Object effects (with data) — json-read-from-string produces symbol keys
    ((assoc 'SpawnCodingAgent effect)
     (let* ((data (cdr (assoc 'SpawnCodingAgent effect)))
