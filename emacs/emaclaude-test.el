@@ -493,6 +493,29 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
       (emaclaude--dispatch-effect "ResetCodingAndReview")
       (should called))))
 
+(ert-deftest emaclaude-test-dispatch-insert-into-planning-buffer ()
+  "InsertIntoPlanningBuffer should call agent-shell-insert with :submit nil."
+  (let* ((plan-buf (generate-new-buffer "*test-plan-insert*"))
+         (emaclaude-buffer-planning "*test-plan-insert*")
+         (emaclaude--agent-buffers
+          `(("*test-plan-insert*" . ,plan-buf)))
+         (captured-text nil)
+         (captured-submit nil)
+         (captured-buf nil))
+    (cl-letf (((symbol-function 'agent-shell-insert)
+               (lambda (&rest args)
+                 (setq captured-text (plist-get args :text))
+                 (setq captured-submit (plist-get args :submit))
+                 (setq captured-buf (plist-get args :shell-buffer)))))
+      (unwind-protect
+          (progn
+            (emaclaude--dispatch-effect
+             '((InsertIntoPlanningBuffer . ((message . "Implementation is done.")))))
+            (should (equal captured-text "Implementation is done."))
+            (should (null captured-submit))
+            (should (equal captured-buf plan-buf)))
+        (when (buffer-live-p plan-buf) (kill-buffer plan-buf))))))
+
 ;;; --- Workflow state variable tests ---
 
 (ert-deftest emaclaude-test-workflow-state-exists ()

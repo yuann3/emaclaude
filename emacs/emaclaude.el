@@ -457,6 +457,12 @@ effects with data)."
    ((assoc 'Notify effect)
     (let ((message (alist-get 'message (cdr (assoc 'Notify effect)))))
       (emaclaude--notify message)))
+   ((assoc 'InsertIntoPlanningBuffer effect)
+    (let* ((data (cdr (assoc 'InsertIntoPlanningBuffer effect)))
+           (message (alist-get 'message data))
+           (buf (emaclaude--get-buffer emaclaude-buffer-planning)))
+      (when (and buf message)
+        (agent-shell-insert :text message :submit nil :shell-buffer buf))))
    (t (emaclaude--notify (format "unknown effect: %S" effect)))))
 
 ;;;###autoload
