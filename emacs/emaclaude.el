@@ -577,19 +577,20 @@ Ensures an Emacs server is running so emaclaude-signal can reach this instance."
 (defun emaclaude-clear-session ()
   "Kill all agent buffers, cancel watchdog, restore windows.
 Drives the state machine through ClearSession -> Shutdown, then
-performs direct cleanup as a safety net."
+performs direct cleanup as a safety net.  Asks for confirmation first."
   (interactive)
-  ;; Drive the state machine (dispatches Shutdown -> cleanup)
-  (ignore-errors
-    (emaclaude--handle-event "clear-session"))
-  ;; Cancel watchdog timer
-  (emaclaude--cancel-watchdog)
-  ;; Safety net: ensure cleanup even if state machine fails
-  (emaclaude--cleanup-buffers-and-windows)
-  ;; Stop the dedicated server
-  (when (server-running-p emaclaude--server-name)
-    (let ((server-name emaclaude--server-name))
-      (server-force-delete))))
+  (when (y-or-n-p "Clear emaclaude session? This will kill all agent buffers. ")
+    ;; Drive the state machine (dispatches Shutdown -> cleanup)
+    (ignore-errors
+      (emaclaude--handle-event "clear-session"))
+    ;; Cancel watchdog timer
+    (emaclaude--cancel-watchdog)
+    ;; Safety net: ensure cleanup even if state machine fails
+    (emaclaude--cleanup-buffers-and-windows)
+    ;; Stop the dedicated server
+    (when (server-running-p emaclaude--server-name)
+      (let ((server-name emaclaude--server-name))
+        (server-force-delete)))))
 
 ;;;###autoload
 (defun emaclaude-next-cycle ()
