@@ -32,6 +32,7 @@ pub enum Event {
     CreatePr,
     AddressGithubReviews { pr_number: u64 },
     ClearSession,
+    CycleComplete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +45,8 @@ pub enum SideEffect {
     RefreshDiffView,
     Notify { message: String },
     Shutdown,
+    ResetCodingAndReview,
+    InsertIntoPlanningBuffer { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +79,28 @@ impl WorkflowState {
                         message: "Session cleared".to_string(),
                     },
                     SideEffect::Shutdown,
+                ],
+            };
+        }
+
+        // CycleComplete from any non-Idle state
+        if let Event::CycleComplete = &event {
+            if self == WorkflowState::Idle {
+                return Transition {
+                    state: WorkflowState::Idle,
+                    effects: vec![],
+                };
+            }
+            return Transition {
+                state: WorkflowState::Idle,
+                effects: vec![
+                    SideEffect::ResetCodingAndReview,
+                    SideEffect::InsertIntoPlanningBuffer {
+                        message: "Implementation is done. Let's move on to the next task.".to_string(),
+                    },
+                    SideEffect::Notify {
+                        message: "Cycle complete. Ready for next planning session.".to_string(),
+                    },
                 ],
             };
         }

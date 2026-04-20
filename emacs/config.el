@@ -4,7 +4,8 @@
   :commands (emaclaude-launch
              emaclaude-clear-session
              emaclaude-open-diff
-             emaclaude-address-github-reviews)
+             emaclaude-address-github-reviews
+             emaclaude-next-cycle)
   :config
   (map! :map emaclaude-review-mode-map
         :localleader
@@ -12,4 +13,5 @@
         :v "c" #'emaclaude-add-comment
         :n "s" #'emaclaude-submit-comments
         :n "p" #'emaclaude-create-pr
-        :n "q" #'emaclaude-close-diff))
+        :n "q" #'emaclaude-close-diff
+        :n "n" #'emaclaude-next-cycle))

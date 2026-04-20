@@ -174,7 +174,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude-planning-agent 'test-agent)
         (emaclaude-coding-agent 'test-agent)
         (emaclaude-review-agent 'test-agent)
-        (agent-shell-agent-configs '((test-agent . ((:model . "test")))))
+        (agent-shell-agent-configs '(((:identifier . test-agent) (:model . "test"))))
         (tmp-buf (generate-new-buffer "*test-launch-wc*")))
     (cl-letf (((symbol-function 'agent-shell-start)
                (lambda (&rest _) tmp-buf))
@@ -197,7 +197,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude-planning-agent 'test-agent)
         (emaclaude-coding-agent 'test-agent)
         (emaclaude-review-agent 'test-agent)
-        (agent-shell-agent-configs '((test-agent . ((:model . "test")))))
+        (agent-shell-agent-configs '(((:identifier . test-agent) (:model . "test"))))
         (spawned-names nil))
     (cl-letf (((symbol-function 'emaclaude--spawn-buffer)
                (lambda (name _config)
@@ -269,6 +269,10 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 (ert-deftest emaclaude-test-event-mapping-clear-session ()
   "emaclaude--map-event should map clear-session to ClearSession string."
   (should (equal (emaclaude--map-event "clear-session") "ClearSession")))
+
+(ert-deftest emaclaude-test-event-mapping-cycle-complete ()
+  "emaclaude--map-event should map cycle-complete to CycleComplete string."
+  (should (equal (emaclaude--map-event "cycle-complete") "CycleComplete")))
 
 ;;; --- emaclaude--handle-event tests ---
 
@@ -417,6 +421,100 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
       (emaclaude--dispatch-effect "Shutdown")
       (should cleanup-called)
       (should (equal emaclaude--workflow-state "\"Idle\"")))))
+
+(ert-deftest emaclaude-test-reset-coding-and-review-kills-buffers ()
+  "emaclaude--reset-coding-and-review should kill coding and review buffers."
+  (let* ((coding-buf (generate-new-buffer "*test-coding*"))
+         (review-buf (generate-new-buffer "*test-review*"))
+         (plan-buf (generate-new-buffer "*test-planning*"))
+         (emaclaude-buffer-coding "*test-coding*")
+         (emaclaude-buffer-review "*test-review*")
+         (emaclaude-buffer-planning "*test-planning*")
+         (emaclaude-buffer-diff "*test-diff*")
+         (emaclaude--agent-buffers
+          `(("*test-coding*" . ,coding-buf)
+            ("*test-review*" . ,review-buf)
+            ("*test-planning*" . ,plan-buf)))
+         (emaclaude--agent-configs
+          '((coding . ((:model . "test")))
+            (review . ((:model . "test")))
+            (planning . ((:model . "test"))))))
+    (cl-letf (((symbol-function 'emaclaude--spawn-buffer)
+               (lambda (name _config) (generate-new-buffer name)))
+              ((symbol-function 'emaclaude--split-layout) #'ignore)
+              ((symbol-function 'get-buffer-window) (lambda (_) nil)))
+      (unwind-protect
+          (progn
+            (emaclaude--reset-coding-and-review)
+            (should-not (buffer-live-p coding-buf))
+            (should-not (buffer-live-p review-buf))
+            (should (buffer-live-p plan-buf)))
+        (dolist (name '("*test-coding*" "*test-review*" "*test-planning*"))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+(ert-deftest emaclaude-test-reset-coding-and-review-respawns ()
+  "emaclaude--reset-coding-and-review should respawn coding and review buffers."
+  (let* ((coding-buf (generate-new-buffer "*test-coding*"))
+         (review-buf (generate-new-buffer "*test-review*"))
+         (plan-buf (generate-new-buffer "*test-planning*"))
+         (emaclaude-buffer-coding "*test-coding*")
+         (emaclaude-buffer-review "*test-review*")
+         (emaclaude-buffer-planning "*test-planning*")
+         (emaclaude-buffer-diff "*test-diff*")
+         (emaclaude--agent-buffers
+          `(("*test-coding*" . ,coding-buf)
+            ("*test-review*" . ,review-buf)
+            ("*test-planning*" . ,plan-buf)))
+         (emaclaude--agent-configs
+          '((coding . ((:model . "test")))
+            (review . ((:model . "test")))
+            (planning . ((:model . "test")))))
+         (spawned-names nil))
+    (cl-letf (((symbol-function 'emaclaude--spawn-buffer)
+               (lambda (name _config)
+                 (push name spawned-names)
+                 (generate-new-buffer name)))
+              ((symbol-function 'emaclaude--split-layout) #'ignore)
+              ((symbol-function 'get-buffer-window) (lambda (_) nil)))
+      (unwind-protect
+          (progn
+            (emaclaude--reset-coding-and-review)
+            (should (member "*test-coding*" spawned-names))
+            (should (member "*test-review*" spawned-names))
+            (should-not (member "*test-planning*" spawned-names)))
+        (dolist (name '("*test-coding*" "*test-review*" "*test-planning*"))
+          (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+(ert-deftest emaclaude-test-dispatch-reset-coding-and-review ()
+  "ResetCodingAndReview effect should call emaclaude--reset-coding-and-review."
+  (let ((called nil))
+    (cl-letf (((symbol-function 'emaclaude--reset-coding-and-review)
+               (lambda () (setq called t))))
+      (emaclaude--dispatch-effect "ResetCodingAndReview")
+      (should called))))
+
+(ert-deftest emaclaude-test-dispatch-insert-into-planning-buffer ()
+  "InsertIntoPlanningBuffer should call agent-shell-insert with :submit nil."
+  (let* ((plan-buf (generate-new-buffer "*test-plan-insert*"))
+         (emaclaude-buffer-planning "*test-plan-insert*")
+         (emaclaude--agent-buffers
+          `(("*test-plan-insert*" . ,plan-buf)))
+         (captured-text nil)
+         (captured-submit nil)
+         (captured-buf nil))
+    (cl-letf (((symbol-function 'agent-shell-insert)
+               (lambda (&rest args)
+                 (setq captured-text (plist-get args :text))
+                 (setq captured-submit (plist-get args :submit))
+                 (setq captured-buf (plist-get args :shell-buffer)))))
+      (unwind-protect
+          (progn
+            (emaclaude--dispatch-effect
+             '((InsertIntoPlanningBuffer . ((message . "Implementation is done.")))))
+            (should (equal captured-text "Implementation is done."))
+            (should (null captured-submit))
+            (should (equal captured-buf plan-buf)))
+        (when (buffer-live-p plan-buf) (kill-buffer plan-buf))))))
 
 ;;; --- Workflow state variable tests ---
 
@@ -600,7 +698,8 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude--saved-window-config nil))
     (emaclaude--reset-watchdog)
     (should (timerp emaclaude--watchdog-timer))
-    (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+              ((symbol-function 'emaclaude--handle-event) #'ignore)
               ((symbol-function 'emaclaude--notify) #'ignore)
               ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
       (emaclaude-clear-session))
@@ -612,7 +711,8 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude--watchdog-timer nil)
         (emaclaude--agent-configs '((planning . ((:model . "test")))))
         (emaclaude--saved-window-config nil))
-    (cl-letf (((symbol-function 'emaclaude--handle-event) #'ignore)
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+              ((symbol-function 'emaclaude--handle-event) #'ignore)
               ((symbol-function 'emaclaude--notify) #'ignore)
               ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
       (emaclaude-clear-session))
@@ -693,8 +793,8 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 (ert-deftest emaclaude-test-resolve-agent-symbol-finds-config ()
   "emaclaude--resolve-agent-symbol should return matching config from agent-shell-agent-configs."
   (let ((agent-shell-agent-configs
-         '((claude-code . ((:model . "claude") (:buffer-name . "Claude")))
-           (codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+         '(((:identifier . claude-code) (:model . "claude") (:buffer-name . "Claude"))
+           ((:identifier . codex) (:model . "codex") (:buffer-name . "Codex")))))
     (let ((result (emaclaude--resolve-agent-symbol 'claude-code)))
       (should (equal (alist-get :model result) "claude"))
       (should (equal (alist-get :buffer-name result) "Claude")))))
@@ -702,7 +802,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
 (ert-deftest emaclaude-test-resolve-agent-symbol-errors-on-not-found ()
   "emaclaude--resolve-agent-symbol should signal error when symbol not found."
   (let ((agent-shell-agent-configs
-         '((claude-code . ((:model . "claude"))))))
+         '(((:identifier . claude-code) (:model . "claude")))))
     (should-error (emaclaude--resolve-agent-symbol 'nonexistent) :type 'user-error)))
 
 ;;; --- emaclaude--resolve-agent-config tests ---
@@ -715,7 +815,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude--resolve-agent-config should use the role-specific defcustom."
   (let ((emaclaude-planning-agent 'claude-code)
         (agent-shell-agent-configs
-         '((claude-code . ((:model . "claude") (:buffer-name . "Claude"))))))
+         '(((:identifier . claude-code) (:model . "claude") (:buffer-name . "Claude")))))
     (let ((result (emaclaude--resolve-agent-config 'planning)))
       (should (equal (alist-get :model result) "claude")))))
 
@@ -724,7 +824,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   (let ((emaclaude-coding-agent nil)
         (agent-shell-preferred-agent-config 'codex)
         (agent-shell-agent-configs
-         '((codex . ((:model . "codex") (:buffer-name . "Codex"))))))
+         '(((:identifier . codex) (:model . "codex") (:buffer-name . "Codex")))))
     (let ((result (emaclaude--resolve-agent-config 'coding)))
       (should (equal (alist-get :model result) "codex")))))
 
@@ -740,9 +840,9 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude-coding-agent 'agent-b)
         (emaclaude-review-agent 'agent-c)
         (agent-shell-agent-configs
-         '((agent-a . ((:id . "a")))
-           (agent-b . ((:id . "b")))
-           (agent-c . ((:id . "c"))))))
+         '(((:identifier . agent-a) (:id . "a"))
+           ((:identifier . agent-b) (:id . "b"))
+           ((:identifier . agent-c) (:id . "c")))))
     (should (equal (alist-get :id (emaclaude--resolve-agent-config 'planning)) "a"))
     (should (equal (alist-get :id (emaclaude--resolve-agent-config 'coding)) "b"))
     (should (equal (alist-get :id (emaclaude--resolve-agent-config 'review)) "c"))))
@@ -756,8 +856,8 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude-coding-agent 'claude-code)
         (emaclaude-review-agent 'codex)
         (agent-shell-agent-configs
-         '((claude-code . ((:model . "claude")))
-           (codex . ((:model . "codex")))))
+         '(((:identifier . claude-code) (:model . "claude"))
+           ((:identifier . codex) (:model . "codex"))))
         (tmp-buf (generate-new-buffer "*test-launch-configs*")))
     (cl-letf (((symbol-function 'agent-shell-start)
                (lambda (&rest _) tmp-buf))
@@ -809,7 +909,7 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
         (emaclaude-coding-agent 'test-agent)
         (emaclaude-review-agent 'test-agent)
         (agent-shell-agent-configs
-         '((test-agent . ((:model . "test")))))
+         '(((:identifier . test-agent) (:model . "test"))))
         (tmp-buf (generate-new-buffer "*test-launch-no-prompt*")))
     (cl-letf (((symbol-function 'agent-shell-select-config)
                (lambda (&rest _)
@@ -828,6 +928,55 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
                             emaclaude-buffer-coding
                             emaclaude-buffer-review))
           (when-let ((b (get-buffer name))) (kill-buffer b)))))))
+
+;;; --- Clear session confirmation tests ---
+
+(ert-deftest emaclaude-test-clear-session-confirms-before-clearing ()
+  "emaclaude-clear-session should ask for confirmation and proceed when yes."
+  (let ((emaclaude--workflow-state "\"Coding\"")
+        (emaclaude--watchdog-timer nil)
+        (emaclaude--agent-configs '((planning . ((:model . "test")))))
+        (emaclaude--saved-window-config nil)
+        (handle-event-called nil))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+              ((symbol-function 'emaclaude--handle-event)
+               (lambda (&rest _) (setq handle-event-called t)))
+              ((symbol-function 'emaclaude--notify) #'ignore)
+              ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
+      (emaclaude-clear-session)
+      (should handle-event-called))))
+
+(ert-deftest emaclaude-test-clear-session-aborts-on-no ()
+  "emaclaude-clear-session should abort when user says no."
+  (let ((emaclaude--workflow-state "\"Coding\"")
+        (emaclaude--watchdog-timer nil)
+        (emaclaude--agent-configs '((planning . ((:model . "test")))))
+        (emaclaude--saved-window-config nil)
+        (handle-event-called nil))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil))
+              ((symbol-function 'emaclaude--handle-event)
+               (lambda (&rest _) (setq handle-event-called t)))
+              ((symbol-function 'emaclaude--notify) #'ignore)
+              ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
+      (emaclaude-clear-session)
+      (should-not handle-event-called)
+      ;; State should be unchanged
+      (should (equal emaclaude--workflow-state "\"Coding\"")))))
+
+;;; --- emaclaude-next-cycle tests ---
+
+(ert-deftest emaclaude-test-next-cycle-is-interactive ()
+  "emaclaude-next-cycle should be an interactive command."
+  (should (commandp #'emaclaude-next-cycle)))
+
+(ert-deftest emaclaude-test-next-cycle-calls-handle-event ()
+  "emaclaude-next-cycle should call emaclaude--handle-event with cycle-complete."
+  (let ((captured-event nil))
+    (cl-letf (((symbol-function 'emaclaude--handle-event)
+               (lambda (event &optional payload)
+                 (setq captured-event event))))
+      (emaclaude-next-cycle)
+      (should (equal captured-event "cycle-complete")))))
 
 (provide 'emaclaude-test)
 ;;; emaclaude-test.el ends here
