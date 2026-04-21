@@ -74,8 +74,8 @@ pub struct WorkflowConfig {
 }
 
 const CODING_DONE_SIGNAL: &str =
-    "When done, report via: emaclaude-signal coding-done '{{\"branch\": \"current\"}}'";
-const REVIEW_DONE_SIGNAL: &str = "When done, report via: emaclaude-signal review-done '{{\"status\": \"approved\"}}' or '{{\"status\": \"changes_needed\", \"feedback\": \"...\"}}'";
+    r#"When done, report via: emaclaude-signal coding-done '{"branch": "current"}'"#;
+const REVIEW_DONE_SIGNAL: &str = r#"When done, report via: emaclaude-signal review-done '{"status": "approved"}' or '{"status": "changes_needed", "feedback": "..."}'"#;
 
 fn request_review_prompt(branch: &str) -> String {
     format!(

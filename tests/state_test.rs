@@ -597,6 +597,11 @@ fn no_curl_or_localhost_in_any_prompt() {
                         "Missing 'emaclaude-signal' in prompt: {}",
                         prompt
                     );
+                    assert!(
+                        !prompt.contains("{{") && !prompt.contains("}}"),
+                        "Found doubled braces in prompt: {}",
+                        prompt
+                    );
                 }
                 _ => {}
             }
