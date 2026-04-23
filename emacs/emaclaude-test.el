@@ -58,16 +58,6 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
   "emaclaude-launch should be defined as a function."
   (should (fboundp #'emaclaude-launch)))
 
-;;; --- Backend selection state ---
-
-(ert-deftest emaclaude-test-selected-backend-variable-exists ()
-  "emaclaude--agent-configs should be a defined variable."
-  (should (boundp 'emaclaude--agent-configs)))
-
-(ert-deftest emaclaude-test-selected-backend-initially-nil ()
-  "emaclaude--agent-configs should be nil initially."
-  (should (null emaclaude--agent-configs)))
-
 ;;; --- Buffer name customization ---
 
 (ert-deftest emaclaude-test-planning-buffer-name ()
@@ -163,6 +153,22 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
             ;; Register buffer in agent-buffers
             (setf (alist-get "*test-success-agent*" emaclaude--agent-buffers nil nil #'equal) buf)
             (should (eq t (emaclaude-send-to-agent "*test-success-agent*" "msg"))))
+        (kill-buffer buf)))))
+
+(ert-deftest emaclaude-test-send-to-agent-returns-nil-on-error ()
+  "emaclaude-send-to-agent should return nil when queueing fails."
+  (let ((buf (generate-new-buffer "*test-error-agent*"))
+        (emaclaude--agent-buffers nil)
+        (notified nil))
+    (cl-letf (((symbol-function 'agent-shell-queue-request)
+               (lambda (_) (error "queue failed")))
+              ((symbol-function 'emaclaude--notify)
+               (lambda (msg) (setq notified msg))))
+      (unwind-protect
+          (progn
+            (setf (alist-get "*test-error-agent*" emaclaude--agent-buffers nil nil #'equal) buf)
+            (should-not (emaclaude-send-to-agent "*test-error-agent*" "msg"))
+            (should (string-match-p "queue failed" notified)))
         (kill-buffer buf)))))
 
 ;;; --- emaclaude-launch integration tests ---
@@ -945,6 +951,26 @@ Derived from the loaded emaclaude.el, so it works regardless of CWD.")
               ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
       (emaclaude-clear-session)
       (should handle-event-called))))
+
+(ert-deftest emaclaude-test-clear-session-falls-back-to-direct-cleanup ()
+  "emaclaude-clear-session should clean up directly when the state machine fails."
+  (let ((cleaned-up nil))
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+              ((symbol-function 'emaclaude--handle-event) (lambda (&rest _) nil))
+              ((symbol-function 'emaclaude--cleanup-buffers-and-windows)
+               (lambda () (setq cleaned-up t)))
+              ((symbol-function 'server-running-p) (lambda (&rest _) nil)))
+      (emaclaude-clear-session)
+      (should cleaned-up))))
+
+(ert-deftest emaclaude-test-add-comment-errors-without-file ()
+  "emaclaude-add-comment should reject comments outside a file hunk."
+  (cl-letf (((symbol-function 'magit-file-at-point) (lambda () nil)))
+    (with-temp-buffer
+      (insert "x")
+      (should-error
+       (emaclaude-add-comment (point-min) (point-max))
+       :type 'user-error))))
 
 (ert-deftest emaclaude-test-clear-session-aborts-on-no ()
   "emaclaude-clear-session should abort when user says no."

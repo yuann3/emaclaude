@@ -170,11 +170,13 @@ fn human_review_sends_comments_to_coding_agent() {
         Comment {
             file: "src/main.rs".into(),
             line: 42,
+            end_line: Some(45),
             text: "rename this variable".into(),
         },
         Comment {
             file: "src/lib.rs".into(),
             line: 10,
+            end_line: None,
             text: "add docs".into(),
         },
     ];
@@ -183,7 +185,7 @@ fn human_review_sends_comments_to_coding_agent() {
     assert_eq!(t.effects.len(), 1);
     match &t.effects[0] {
         SideEffect::SendToCodingAgent { prompt } => {
-            assert!(prompt.contains("src/main.rs:42: rename this variable"));
+            assert!(prompt.contains("src/main.rs:42-45: rename this variable"));
             assert!(prompt.contains("src/lib.rs:10: add docs"));
             assert!(prompt.contains("emaclaude-signal coding-done"));
             assert!(!prompt.contains("curl"));
@@ -202,7 +204,7 @@ fn human_review_to_pr_created() {
     match &t.effects[0] {
         SideEffect::SendToCodingAgent { prompt } => {
             assert!(prompt.contains("pull request"));
-            assert!(prompt.contains("emaclaude-signal pr-created"));
+            assert!(prompt.contains("emaclaude-signal coding-done"));
             assert!(!prompt.contains("curl"));
             assert!(!prompt.contains("localhost"));
         }
@@ -213,10 +215,7 @@ fn human_review_to_pr_created() {
 #[test]
 fn pr_created_addresses_github_reviews() {
     let config = default_config();
-    let t = WorkflowState::PrCreated.next(
-        Event::AddressGithubReviews { pr_number: 42 },
-        &config,
-    );
+    let t = WorkflowState::PrCreated.next(Event::AddressGithubReviews { pr_number: 42 }, &config);
     assert_eq!(t.state, WorkflowState::PrCreated);
     assert_eq!(t.effects.len(), 1);
     match &t.effects[0] {
@@ -244,7 +243,12 @@ fn clear_session_from_any_state() {
     ];
     for state in states {
         let t = state.clone().next(Event::ClearSession, &config);
-        assert_eq!(t.state, WorkflowState::Idle, "ClearSession from {:?}", state);
+        assert_eq!(
+            t.state,
+            WorkflowState::Idle,
+            "ClearSession from {:?}",
+            state
+        );
         assert_eq!(t.effects.len(), 2);
         match &t.effects[0] {
             SideEffect::Notify { message } => {
@@ -286,12 +290,7 @@ fn pr_created_coding_done_refreshes_diff() {
 fn unhandled_transition_returns_same_state() {
     let config = default_config();
     // Idle + CodingDone should be unhandled
-    let t = WorkflowState::Idle.next(
-        Event::CodingDone {
-            branch: "x".into(),
-        },
-        &config,
-    );
+    let t = WorkflowState::Idle.next(Event::CodingDone { branch: "x".into() }, &config);
     assert_eq!(t.state, WorkflowState::Idle);
     assert!(t.effects.is_empty());
 }
@@ -338,7 +337,10 @@ fn json_round_trip_transition_input() {
 fn json_round_trip_confirming_state() {
     let state = WorkflowState::Confirming { approval_count: 3 };
     let json = serde_json::to_value(&state).unwrap();
-    assert_eq!(json, serde_json::json!({"Confirming": {"approval_count": 3}}));
+    assert_eq!(
+        json,
+        serde_json::json!({"Confirming": {"approval_count": 3}})
+    );
     let deserialized: WorkflowState = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, state);
 }
@@ -399,12 +401,38 @@ fn json_event_with_data() {
 }
 
 #[test]
+fn json_comment_with_optional_end_line() {
+    let comment = Comment {
+        file: "src/main.rs".into(),
+        line: 12,
+        end_line: Some(14),
+        text: "tighten this branch".into(),
+    };
+    let json = serde_json::to_value(&comment).unwrap();
+    assert_eq!(json["file"], "src/main.rs");
+    assert_eq!(json["line"], 12);
+    assert_eq!(json["end_line"], 14);
+    assert_eq!(json["text"], "tighten this branch");
+
+    let decoded: Comment = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded, comment);
+}
+
+#[test]
 fn cycle_complete_from_coding() {
     let config = default_config();
     let t = WorkflowState::Coding.next(Event::CycleComplete, &config);
     assert_eq!(t.state, WorkflowState::Idle);
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::InsertIntoPlanningBuffer { .. })));
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ResetCodingAndReview))
+    );
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::InsertIntoPlanningBuffer { .. }))
+    );
 }
 
 #[test]
@@ -412,7 +440,11 @@ fn cycle_complete_from_reviewing() {
     let config = default_config();
     let t = WorkflowState::Reviewing.next(Event::CycleComplete, &config);
     assert_eq!(t.state, WorkflowState::Idle);
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ResetCodingAndReview))
+    );
 }
 
 #[test]
@@ -420,7 +452,11 @@ fn cycle_complete_from_confirming() {
     let config = default_config();
     let t = WorkflowState::Confirming { approval_count: 1 }.next(Event::CycleComplete, &config);
     assert_eq!(t.state, WorkflowState::Idle);
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ResetCodingAndReview))
+    );
 }
 
 #[test]
@@ -428,7 +464,11 @@ fn cycle_complete_from_human_review() {
     let config = default_config();
     let t = WorkflowState::HumanReview.next(Event::CycleComplete, &config);
     assert_eq!(t.state, WorkflowState::Idle);
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ResetCodingAndReview))
+    );
 }
 
 #[test]
@@ -436,7 +476,11 @@ fn cycle_complete_from_pr_created() {
     let config = default_config();
     let t = WorkflowState::PrCreated.next(Event::CycleComplete, &config);
     assert_eq!(t.state, WorkflowState::Idle);
-    assert!(t.effects.iter().any(|e| matches!(e, SideEffect::ResetCodingAndReview)));
+    assert!(
+        t.effects
+            .iter()
+            .any(|e| matches!(e, SideEffect::ResetCodingAndReview))
+    );
 }
 
 #[test]
@@ -489,10 +533,7 @@ fn no_curl_or_localhost_in_any_prompt() {
     let config = default_config();
     // Collect all transitions that produce prompt text
     let transitions = vec![
-        WorkflowState::Coding.next(
-            Event::CodingDone { branch: "b".into() },
-            &config,
-        ),
+        WorkflowState::Coding.next(Event::CodingDone { branch: "b".into() }, &config),
         WorkflowState::Reviewing.next(
             Event::ReviewDone {
                 status: ReviewStatus::ChangesNeeded,
@@ -526,16 +567,14 @@ fn no_curl_or_localhost_in_any_prompt() {
                 comments: vec![Comment {
                     file: "f".into(),
                     line: 1,
+                    end_line: None,
                     text: "t".into(),
                 }],
             },
             &config,
         ),
         WorkflowState::HumanReview.next(Event::CreatePr, &config),
-        WorkflowState::PrCreated.next(
-            Event::AddressGithubReviews { pr_number: 1 },
-            &config,
-        ),
+        WorkflowState::PrCreated.next(Event::AddressGithubReviews { pr_number: 1 }, &config),
     ];
 
     for t in &transitions {
@@ -556,6 +595,11 @@ fn no_curl_or_localhost_in_any_prompt() {
                     assert!(
                         prompt.contains("emaclaude-signal"),
                         "Missing 'emaclaude-signal' in prompt: {}",
+                        prompt
+                    );
+                    assert!(
+                        !prompt.contains("{{") && !prompt.contains("}}"),
+                        "Found doubled braces in prompt: {}",
                         prompt
                     );
                 }

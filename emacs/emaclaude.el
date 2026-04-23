@@ -6,6 +6,7 @@
 (require 'json)
 (require 'map)
 (require 'seq)
+(require 'server)
 (require 'agent-shell)
 
 ;;; --- Customization group ---
@@ -281,14 +282,30 @@ session readiness internally. Returns nil if the buffer does not exist."
   (let ((buf (emaclaude--get-buffer name)))
     (when buf
       (emaclaude--log-event "send-to-agent" nil name message)
-      (with-current-buffer buf
-        (condition-case err
+      (condition-case err
+          (with-current-buffer buf
             (agent-shell-queue-request message)
-          (error
-           (emaclaude--notify
-            (format "send-to-agent failed for %s: %s"
-                    name (error-message-string err))))))
-      t)))
+            t)
+        (error
+         (emaclaude--notify
+          (format "send-to-agent failed for %s: %s"
+                  name (error-message-string err)))
+         nil)))))
+
+(defun emaclaude--kill-buffer-if-live (buf)
+  "Kill BUF after disabling process exit prompts.
+Return non-nil when BUF was live."
+  (when (and buf (buffer-live-p buf))
+    (when-let ((proc (get-buffer-process buf)))
+      (set-process-query-on-exit-flag proc nil))
+    (kill-buffer buf)
+    t))
+
+(defun emaclaude--drop-agent-buffer (name)
+  "Kill and unregister the logical agent buffer NAME."
+  (emaclaude--kill-buffer-if-live
+   (alist-get name emaclaude--agent-buffers nil nil #'equal))
+  (setf (alist-get name emaclaude--agent-buffers nil 'remove #'equal) nil))
 
 (defun emaclaude--diff-base ()
   "Return the base ref for the diff view.
@@ -325,23 +342,12 @@ Expands all file sections so changes are visible per-file."
 (defun emaclaude--cleanup-buffers-and-windows ()
   "Clean up agent buffers and restore window configuration.
 Called by the Shutdown effect during session teardown."
-  ;; Kill registered agent-shell buffers
   (dolist (entry emaclaude--agent-buffers)
-    (let ((buf (cdr entry)))
-      (when (and buf (buffer-live-p buf))
-        (let ((proc (get-buffer-process buf)))
-          (when proc
-            (set-process-query-on-exit-flag proc nil)))
-        (kill-buffer buf))))
-  ;; Kill diff buffer by name (not in agent-buffers alist)
-  (let ((diff-buf (get-buffer emaclaude-buffer-diff)))
-    (when (and diff-buf (buffer-live-p diff-buf))
-      (kill-buffer diff-buf)))
-  ;; Clear state
+    (emaclaude--kill-buffer-if-live (cdr entry)))
+  (emaclaude--kill-buffer-if-live (get-buffer emaclaude-buffer-diff))
   (setq emaclaude--agent-buffers nil)
   (setq emaclaude--agent-configs nil)
   (setq emaclaude--workflow-state "\"Idle\"")
-  ;; Restore window configuration
   (when emaclaude--saved-window-config
     (set-window-configuration emaclaude--saved-window-config)
     (setq emaclaude--saved-window-config nil))
@@ -351,27 +357,13 @@ Called by the Shutdown effect during session teardown."
   "Kill and respawn coding and review agent buffers for a new cycle.
 Preserves the planning buffer and agent configs.  Swaps new buffers
 into existing windows when possible, falls back to full re-layout."
-  ;; Save window references BEFORE killing (buffers have labeled names
-  ;; like "Claude Code [Coding]", so we must grab the window while
-  ;; the old buffer is still alive).
   (let ((coding-win (when-let ((buf (emaclaude--get-buffer emaclaude-buffer-coding)))
                       (get-buffer-window buf)))
         (review-win (when-let ((buf (emaclaude--get-buffer emaclaude-buffer-review)))
                       (get-buffer-window buf))))
-    ;; Kill coding, review, and diff buffers
     (dolist (name (list emaclaude-buffer-coding emaclaude-buffer-review))
-      (let ((buf (alist-get name emaclaude--agent-buffers nil nil #'equal)))
-        (when (and buf (buffer-live-p buf))
-          (let ((proc (get-buffer-process buf)))
-            (when proc
-              (set-process-query-on-exit-flag proc nil)))
-          (kill-buffer buf))
-        ;; Remove from registry
-        (setf (alist-get name emaclaude--agent-buffers nil 'remove #'equal) nil)))
-    (let ((diff-buf (get-buffer emaclaude-buffer-diff)))
-      (when (and diff-buf (buffer-live-p diff-buf))
-        (kill-buffer diff-buf)))
-    ;; Respawn with stored configs, swap into saved windows
+      (emaclaude--drop-agent-buffer name))
+    (emaclaude--kill-buffer-if-live (get-buffer emaclaude-buffer-diff))
     (let ((coding-config (alist-get 'coding emaclaude--agent-configs))
           (review-config (alist-get 'review emaclaude--agent-configs)))
       (when coding-config
@@ -382,7 +374,6 @@ into existing windows when possible, falls back to full re-layout."
         (let ((new-buf (emaclaude--spawn-buffer emaclaude-buffer-review review-config)))
           (when (and review-win (window-live-p review-win) new-buf)
             (set-window-buffer review-win new-buf)))))
-    ;; Fallback: if any window is missing, redo full layout
     (unless (and (when-let ((b (emaclaude--get-buffer emaclaude-buffer-coding)))
                    (get-buffer-window b))
                  (when-let ((b (emaclaude--get-buffer emaclaude-buffer-review)))
@@ -582,14 +573,11 @@ Drives the state machine through ClearSession -> Shutdown, then
 performs direct cleanup as a safety net.  Asks for confirmation first."
   (interactive)
   (when (y-or-n-p "Clear emaclaude session? This will kill all agent buffers. ")
-    ;; Drive the state machine (dispatches Shutdown -> cleanup)
-    (ignore-errors
-      (emaclaude--handle-event "clear-session"))
-    ;; Cancel watchdog timer
+    (require 'server)
+    (let ((handled (emaclaude--handle-event "clear-session")))
+      (unless handled
+        (emaclaude--cleanup-buffers-and-windows)))
     (emaclaude--cancel-watchdog)
-    ;; Safety net: ensure cleanup even if state machine fails
-    (emaclaude--cleanup-buffers-and-windows)
-    ;; Stop the dedicated server
     (when (server-running-p emaclaude--server-name)
       (let ((server-name emaclaude--server-name))
         (server-force-delete)))))
@@ -638,7 +626,8 @@ Works with evil visual line mode (Shift-V): select lines, then SPC m c."
             (evil-visual-state-p))
        (list (region-beginning) (region-end))
      (list (line-beginning-position) (line-end-position))))
-  (let* ((file (or (magit-file-at-point) "unknown"))
+  (let* ((file (or (magit-file-at-point)
+                   (user-error "No file at point")))
          (start-line (line-number-at-pos beg))
          (end-line (line-number-at-pos (max beg (1- end))))
          (line-desc (if (= start-line end-line)
